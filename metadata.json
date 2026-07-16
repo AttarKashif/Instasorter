@@ -1,0 +1,8 @@
+{
+  "name": "Instasorter",
+  "description": "A personal knowledge-management system for Instagram saved posts using exported data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

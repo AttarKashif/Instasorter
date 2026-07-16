@@ -1,0 +1,186 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+:root {
+  /* Studio Gallery - Light Theme (Crisp Studio) - Ultra Premium */
+  --m3-primary: #0f172a; /* Slate 900 */
+  --m3-on-primary: #ffffff;
+  --m3-primary-container: rgba(15, 23, 42, 0.08);
+  --m3-on-primary-container: #020617;
+  
+  --m3-secondary: #475569;
+  --m3-on-secondary: #ffffff;
+  --m3-secondary-container: #f1f5f9;
+  --m3-on-secondary-container: #0f172a;
+  
+  --m3-tertiary: #0f766e;
+  --m3-on-tertiary: #ffffff;
+  --m3-tertiary-container: rgba(15, 118, 110, 0.08);
+  --m3-on-tertiary-container: #134e4a;
+  
+  --m3-surface: rgba(255, 255, 255, 0.85); /* Slightly more transparent glass */
+  --m3-on-surface: #020617; /* Rich Slate */
+  --m3-surface-variant: #f8fafc;
+  --m3-on-surface-variant: #475569;
+  --m3-outline: #cbd5e1;
+  --m3-outline-variant: rgba(226, 232, 240, 0.6); /* Softer borders */
+  
+  --m3-surface-lowest: #ffffff;
+  --m3-surface-low: #ffffff;
+  --m3-surface-container: #f8fafc;
+  --m3-surface-high: #f1f5f9;
+  --m3-surface-highest: #e2e8f0;
+  
+  --twitter-pink: #f91880;
+  --twitter-green: #00ba7c;
+}
+
+.dark {
+  /* Dark Room - Dark Theme - Ultra Premium */
+  --m3-primary: #f1f5f9; /* Slate 100 */
+  --m3-on-primary: #020617;
+  --m3-primary-container: rgba(241, 245, 249, 0.12);
+  --m3-on-primary-container: #ffffff;
+  
+  --m3-secondary: #94a3b8;
+  --m3-on-secondary: #020617;
+  --m3-secondary-container: #1e293b;
+  --m3-on-secondary-container: #f8fafc;
+  
+  --m3-tertiary: #2dd4bf;
+  --m3-on-tertiary: #020617;
+  --m3-tertiary-container: rgba(45, 212, 191, 0.12);
+  --m3-on-tertiary-container: #ccfbf1;
+  
+  --m3-surface: rgba(2, 6, 23, 0.85); /* Deepest slate glass */
+  --m3-on-surface: #f8fafc;
+  --m3-surface-variant: #0f172a;
+  --m3-on-surface-variant: #94a3b8;
+  --m3-outline: #475569;
+  --m3-outline-variant: rgba(51, 65, 85, 0.5); /* Softer borders */
+  
+  --m3-surface-lowest: #020617;
+  --m3-surface-low: #020617;
+  --m3-surface-container: #0f172a;
+  --m3-surface-high: #1e293b;
+  --m3-surface-highest: #334155;
+}
+
+@theme {
+  --shadow-glass-sm: 0 4px 12px -2px rgba(0, 0, 0, 0.03), inset 0 1px 1px rgba(255, 255, 255, 0.3);
+  --shadow-glass-md: 0 12px 32px -4px rgba(0, 0, 0, 0.05), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+  --shadow-glass-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.08), inset 0 1px 1px rgba(255, 255, 255, 0.5);
+  
+  --color-m3-primary: var(--m3-primary);
+  --color-m3-on-primary: var(--m3-on-primary);
+  --color-m3-primary-container: var(--m3-primary-container);
+  --color-m3-on-primary-container: var(--m3-on-primary-container);
+  
+  --color-m3-secondary: var(--m3-secondary);
+  --color-m3-on-secondary: var(--m3-on-secondary);
+  --color-m3-secondary-container: var(--m3-secondary-container);
+  --color-m3-on-secondary-container: var(--m3-on-secondary-container);
+  
+  --color-m3-tertiary: var(--m3-tertiary);
+  --color-m3-on-tertiary: var(--m3-on-tertiary);
+  --color-m3-tertiary-container: var(--m3-tertiary-container);
+  --color-m3-on-tertiary-container: var(--m3-on-tertiary-container);
+  
+  --color-m3-surface: var(--m3-surface);
+  --color-m3-on-surface: var(--m3-on-surface);
+  --color-m3-surface-variant: var(--m3-surface-variant);
+  --color-m3-on-surface-variant: var(--m3-on-surface-variant);
+  --color-m3-outline: var(--m3-outline);
+  --color-m3-outline-variant: var(--m3-outline-variant);
+  
+  --color-m3-surface-lowest: var(--m3-surface-lowest);
+  --color-m3-surface-low: var(--m3-surface-low);
+  --color-m3-surface-container: var(--m3-surface-container);
+  --color-m3-surface-high: var(--m3-surface-high);
+  --color-m3-surface-highest: var(--m3-surface-highest);
+  
+  --color-twitter-pink: var(--twitter-pink);
+  --color-twitter-green: var(--twitter-green);
+  
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  /* Custom inner shadows for better depth */
+  --shadow-inner-m3: inset 0 2px 4px 0 rgba(0, 0, 0, 0.02);
+}
+
+/* Material 3 global styling presets */
+html {
+  scroll-behavior: smooth;
+  background-color: #f1f5f9; /* Slate 100 for better contrast against white cards */
+}
+
+html.dark {
+  background-color: #000000;
+}
+
+body {
+  background-color: transparent;
+  color: var(--m3-on-surface);
+  font-family: var(--font-sans);
+  transition: background-color 0.4s cubic-bezier(0.4, 0, 0.2, 1), color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Glassmorphism base for all surface layers */
+[class*="bg-m3-surface"] {
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+}
+
+/* Exclude the body itself from being blurred to keep the gradient crisp */
+body[class*="bg-m3-surface"], html[class*="bg-m3-surface"] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Form Elements Refinement */
+input[type="text"], input[type="email"], textarea {
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.02);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+input[type="text"]:focus, input[type="email"]:focus, textarea:focus {
+  box-shadow: 0 0 0 4px var(--m3-primary-container), inset 0 2px 6px rgba(0,0,0,0.01);
+}
+
+button {
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); /* Bouncy spring transition */
+}
+button:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+/* Enable smooth scrolling on all overflow containers */
+.overflow-y-auto, .overflow-auto {
+  scroll-behavior: smooth;
+}
+
+/* Scrollbar customizations */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--m3-outline-variant);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--m3-outline);
+}
+
+/* Shimmer loading keyframes */
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.animate-shimmer {
+  animation: shimmer 1.6s infinite cubic-bezier(0.4, 0, 0.2, 1);
+}

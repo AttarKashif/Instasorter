@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%">
+  <defs>
+    <linearGradient id="ig-grad-https___instagram_com_p_DUL7nHdEw_o" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f09433" />
+      <stop offset="25%" stop-color="#e6683c" />
+      <stop offset="50%" stop-color="#dc2743" />
+      <stop offset="75%" stop-color="#cc2366" />
+      <stop offset="100%" stop-color="#bc1888" />
+    </linearGradient>
+  </defs>
+  <rect width="400" height="400" fill="url(#ig-grad-https___instagram_com_p_DUL7nHdEw_o)" />
+  
+  <!-- Subtle dark overlay for premium high contrast readability -->
+  <rect width="400" height="400" fill="black" opacity="0.12" />
+  
+  <!-- Outer nested border -->
+  <rect x="15" y="15" width="370" height="370" rx="20" fill="none" stroke="white" stroke-width="4" opacity="0.35" />
+  
+  <!-- Stylized Vector Camera/Post Icon -->
+  <g transform="translate(140, 110)" stroke="white" fill="none" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="0" y="0" width="120" height="120" rx="30" stroke-width="10" />
+    <circle cx="60" cy="60" r="30" stroke-width="10" />
+    <circle cx="92" cy="28" r="4" fill="white" stroke="none" />
+  </g>
+  
+  <!-- Text layout with elegant typography pairings -->
+  <g font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" text-anchor="middle" fill="white">
+    <!-- User/Creator Tag -->
+    <text x="200" y="295" font-size="22" font-weight="800" letter-spacing="-0.5px">Instagram Post</text>
+    
+    <!-- Shortcode Indicator Box -->
+    <rect x="110" y="318" width="180" height="24" rx="12" fill="white" opacity="0.22" />
+    <text x="200" y="334" font-size="11" font-weight="700" opacity="0.9" letter-spacing="0.5px">DUL7nHdEw_o</text>
+  </g>
+</svg>
