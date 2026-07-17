@@ -20,6 +20,7 @@ import { validateThumbnailUrl } from "./lib/validation";
 import { decodeInstagramText } from "./lib/parser";
 import { Toaster } from "react-hot-toast";
 import { SkeletonLoader } from "./components/ui/SkeletonLoader";
+import { PerformanceMonitor } from "./components/ui/PerformanceMonitor";
 
 export default function App() {
   const [view, setView] = useState<
@@ -65,14 +66,34 @@ export default function App() {
   const [initialEndDate, setInitialEndDate] = useState<string>("");
   const [initialSortBy, setInitialSortBy] = useState<string>("savedAt");
 
-  const {
-    posts,
-    setPosts,
-    setSmartCollections,
-    isLoading,
-    isImportModalOpen,
-    setIsImportModalOpen,
-  } = usePostStore();
+  const posts = usePostStore((state) => state.posts);
+  const setPosts = usePostStore((state) => state.setPosts);
+  const setSmartCollections = usePostStore((state) => state.setSmartCollections);
+  const isLoading = usePostStore((state) => state.isLoading);
+  const isImportModalOpen = usePostStore((state) => state.isImportModalOpen);
+  const setIsImportModalOpen = usePostStore((state) => state.setIsImportModalOpen);
+
+  const [isResetting, setIsResetting] = useState(false);
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get("forceReset") === "true") {
+      setIsResetting(true);
+      const performForceReset = async () => {
+        try {
+          await db.posts.clear();
+          localStorage.clear();
+          setPosts([]);
+          // Strip query parameters and reload to origin
+          window.location.href = window.location.origin + window.location.pathname;
+        } catch (err) {
+          console.error("Force reset failed:", err);
+          setIsResetting(false);
+        }
+      };
+      performForceReset();
+    }
+  }, [setPosts]);
 
   useEffect(() => {
     if (posts.length > 0) {
@@ -96,8 +117,33 @@ export default function App() {
     } else {
       document.documentElement.classList.remove("dark");
     }
-    localStorage.setItem("theme", theme);
   }, [theme]);
+
+  // Robust System Preference Listener fallback
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e: MediaQueryListEvent) => {
+      // Only react to system changes if the user hasn't explicitly saved a preference
+      const saved = localStorage.getItem("theme");
+      if (!saved) {
+        setTheme(e.matches ? "dark" : "light");
+      }
+    };
+    
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener("change", handleChange);
+    } else {
+      mediaQuery.addListener(handleChange);
+    }
+    
+    return () => {
+      if (mediaQuery.removeEventListener) {
+        mediaQuery.removeEventListener("change", handleChange);
+      } else {
+        mediaQuery.removeListener(handleChange);
+      }
+    };
+  }, []);
 
   const handleNavigate = (
     newView: "home" | "analytics" | "settings" | "grouped",
@@ -295,82 +341,108 @@ export default function App() {
       onNavigate={handleNavigate}
       theme={theme}
       onThemeToggle={() =>
-        setTheme((prev) => (prev === "light" ? "dark" : "light"))
+        setTheme((prev) => {
+          const next = prev === "light" ? "dark" : "light";
+          localStorage.setItem("theme", next);
+          return next;
+        })
       }
     >
       <Toaster position="bottom-right" toastOptions={{ style: { background: "var(--m3-surface-low)", color: "var(--m3-on-surface)", border: "1px solid var(--m3-outline-variant)", borderRadius: "16px", boxShadow: "var(--shadow-glass-md)" } }} />
+      <PerformanceMonitor />
       <AnimatePresence mode="wait">
-        <motion.div
-          key={isLoading ? "loading" : view}
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -12 }}
-          transition={{
-            type: "spring",
-            stiffness: 320,
-            damping: 28,
-            mass: 0.8,
-          }}
-          className="h-full"
-        >
-          {isLoading ? (
-            <SkeletonLoader gridDensity={gridDensity} />
-          ) : (
-            <>
-              {view === "home" && (
-                <DashboardView
-                  key="home"
-                  posts={posts}
-                  gridDensity={gridDensity}
-                  setGridDensity={setGridDensity}
-                  creatorFilter={creatorFilter}
-                  setCreatorFilter={setCreatorFilter}
-                  initialFilterFavoriteOnly={initialFilterFavoriteOnly}
-                  initialFilterArchived={initialFilterArchived}
-                  initialSelectedCollections={initialSelectedCollections}
-                  initialSelectedTags={initialSelectedTags}
-                  initialFilterMediaType={initialFilterMediaType}
-                  initialStartDate={initialStartDate}
-                  initialEndDate={initialEndDate}
-                  initialSortBy={initialSortBy}
-                  onNavigate={handleNavigate}
-                />
-              )}
-              {view === "grouped" && (
-                <GroupedView posts={posts} onNavigate={handleNavigate} />
-              )}
-              {view === "analytics" && (
-                <AnalyticsView
-                  posts={posts}
-                  onNavigate={handleNavigate}
-                  setCreatorFilter={setCreatorFilter}
-                  setInitialSelectedCollections={setInitialSelectedCollections}
-                  setInitialSelectedTags={setInitialSelectedTags}
-                  setInitialFilterMediaType={setInitialFilterMediaType}
-                  setInitialFilterFavoriteOnly={setInitialFilterFavoriteOnly}
-                  setInitialFilterArchived={setInitialFilterArchived}
-                  setInitialStartDate={setInitialStartDate}
-                  setInitialEndDate={setInitialEndDate}
-                  setInitialSortBy={setInitialSortBy}
-                />
-              )}
-              {view === "settings" && (
-                <SettingsView
-                  onNavigate={handleNavigate}
-                  onSelectCollection={(colName) => {
-                    setInitialSelectedCollections([colName]);
-                    setInitialSelectedTags([]);
-                    setView("home");
-                  }}
-                  theme={theme}
-                  onThemeToggle={() =>
-                    setTheme((prev) => (prev === "light" ? "dark" : "light"))
+        {isResetting ? (
+          <motion.div
+            key="resetting"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="h-full flex flex-col items-center justify-center p-6 space-y-4 font-sans text-m3-on-surface"
+          >
+            <div className="w-12 h-12 rounded-full border-4 border-red-500 border-t-transparent animate-spin" />
+            <h3 className="font-display font-bold text-lg text-center">Wiping Local Caches &amp; Database...</h3>
+            <p className="text-xs text-m3-on-surface-variant font-medium text-center">Please wait while the library is fully hard-reset.</p>
+          </motion.div>
+        ) : (
+          <motion.div
+            key={isLoading ? "loading" : view}
+            initial={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, y: 15 } : {}}
+            animate={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 1, y: 0 } : {}}
+            exit={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, y: -10 } : {}}
+            transition={
+              localStorage.getItem("instasorter_animations") !== "false"
+                ? {
+                    type: "tween",
+                    ease: [0.16, 1, 0.3, 1], // easeOutExpo
+                    duration: 0.48,
                   }
-                />
-              )}
-            </>
-          )}
-        </motion.div>
+                : { duration: 0 }
+            }
+            className="h-full"
+          >
+            {isLoading ? (
+              <SkeletonLoader gridDensity={gridDensity} />
+            ) : (
+              <>
+                {view === "home" && (
+                  <DashboardView
+                    key="home"
+                    posts={posts}
+                    gridDensity={gridDensity}
+                    setGridDensity={setGridDensity}
+                    creatorFilter={creatorFilter}
+                    setCreatorFilter={setCreatorFilter}
+                    initialFilterFavoriteOnly={initialFilterFavoriteOnly}
+                    initialFilterArchived={initialFilterArchived}
+                    initialSelectedCollections={initialSelectedCollections}
+                    initialSelectedTags={initialSelectedTags}
+                    initialFilterMediaType={initialFilterMediaType}
+                    initialStartDate={initialStartDate}
+                    initialEndDate={initialEndDate}
+                    initialSortBy={initialSortBy}
+                    onNavigate={handleNavigate}
+                  />
+                )}
+                {view === "grouped" && (
+                  <GroupedView posts={posts} onNavigate={handleNavigate} />
+                )}
+                {view === "analytics" && (
+                  <AnalyticsView
+                    posts={posts}
+                    onNavigate={handleNavigate}
+                    setCreatorFilter={setCreatorFilter}
+                    setInitialSelectedCollections={setInitialSelectedCollections}
+                    setInitialSelectedTags={setInitialSelectedTags}
+                    setInitialFilterMediaType={setInitialFilterMediaType}
+                    setInitialFilterFavoriteOnly={setInitialFilterFavoriteOnly}
+                    setInitialFilterArchived={setInitialFilterArchived}
+                    setInitialStartDate={setInitialStartDate}
+                    setInitialEndDate={setInitialEndDate}
+                    setInitialSortBy={setInitialSortBy}
+                  />
+                )}
+                {view === "settings" && (
+                  <SettingsView
+                    onNavigate={handleNavigate}
+                    onSelectCollection={(colName) => {
+                      setInitialSelectedCollections([colName]);
+                      setInitialSelectedTags([]);
+                      setView("home");
+                    }}
+                    theme={theme}
+                    onThemeToggle={() =>
+                      setTheme((prev) => {
+                        const next = prev === "light" ? "dark" : "light";
+                        localStorage.setItem("theme", next);
+                        return next;
+                      })
+                    }
+                  />
+                )}
+              </>
+            )}
+          </motion.div>
+        )}
       </AnimatePresence>
 
       <AnimatePresence>

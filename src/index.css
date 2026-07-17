@@ -184,3 +184,12 @@ button:active:not(:disabled) {
 .animate-shimmer {
   animation: shimmer 1.6s infinite cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* Scrollbar utility classes */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}

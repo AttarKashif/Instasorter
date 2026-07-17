@@ -14,6 +14,9 @@ import {
   CheckCircle2,
   RefreshCw,
   X,
+  Trash2,
+  ShieldAlert,
+  Layers,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -22,8 +25,10 @@ interface ImportViewProps {
 }
 
 export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
-  const { isImporting: isProcessing, setIsImporting: setIsProcessing } =
-    usePostStore();
+  const isProcessing = usePostStore((state) => state.isImporting);
+  const setIsProcessing = usePostStore((state) => state.setIsImporting);
+  const importMessage = usePostStore((state) => state.importMessage);
+  const posts = usePostStore((state) => state.posts);
   const [isDragging, setIsDragging] = useState(false);
   const [importStatus, setImportStatus] = useState<{
     type: "success" | "error";
@@ -36,6 +41,37 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const setPosts = usePostStore((state) => state.setPosts);
+
+  const [showConfirmClear, setShowConfirmClear] = useState(false);
+
+  const exportData = () => {
+    const dataStr =
+      "data:text/json;charset=utf-8," +
+      encodeURIComponent(JSON.stringify(posts));
+    const downloadAnchorNode = document.createElement("a");
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute(
+      "download",
+      `instasorter_export_${new Date().toISOString().split("T")[0]}.json`,
+    );
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
+  };
+
+  const handleClearAllPosts = async () => {
+    try {
+      await db.posts.clear();
+      setPosts([]);
+      setShowConfirmClear(false);
+      setImportStatus({
+        type: "success",
+        message: "Your local database has been successfully cleared of all bookmarks and collections.",
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   const processFile = async (file: File) => {
     setIsProcessing(true, "Initializing archive read...");
@@ -350,80 +386,25 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
           </div>
 
           {/* Drag and Drop Zone - styled as M3 Outlined Card with interaction */}
-          <motion.div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={triggerFileInput}
-            whileHover={{ scale: 1.01 }}
-            whileTap={{ scale: 0.99 }}
-            className={`relative border border-dashed rounded-[20px] p-6 md:p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 min-h-[200px] ${
-              isDragging
-                ? "border-m3-primary bg-m3-primary-container/20 shadow-inner"
-                : "border-m3-outline-variant hover:border-m3-outline hover:bg-m3-surface-container/30 bg-m3-surface-low"
-            }`}
-          >
-            <input
-              type="file"
-              ref={fileInputRef}
-              accept=".json,.zip"
-              onChange={handleFileUpload}
-              disabled={isProcessing}
-              className="hidden"
-            />
+          {isProcessing ? (
+            <div className="relative border border-m3-outline-variant/60 rounded-[20px] p-6 md:p-10 flex flex-col items-center justify-center text-center bg-m3-surface-low min-h-[220px] shadow-xs">
+              <div className="flex flex-col items-center gap-5 w-full max-w-md">
+                <div className="w-14 h-14 rounded-full bg-m3-primary/10 text-m3-primary flex items-center justify-center animate-spin">
+                  <RefreshCw size={24} className="stroke-[2.5]" />
+                </div>
 
-            <div className="flex flex-col items-center gap-3">
-              <div
-                className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors duration-300 ${
-                  isDragging
-                    ? "bg-m3-primary-container text-m3-on-primary-container"
-                    : "bg-m3-surface-variant text-m3-on-surface-variant"
-                }`}
-              >
-                <Upload
-                  size={20}
-                  className={isProcessing ? "animate-bounce" : ""}
-                />
-              </div>
+                <div className="space-y-1.5 w-full">
+                  <h3 className="text-sm font-bold font-display text-m3-on-surface">
+                    Importing Your Archive...
+                  </h3>
+                  <p className="text-[11px] text-m3-on-surface-variant font-medium">
+                    {importMessage || "Reading and compiling Instagram dataset..."}
+                  </p>
+                </div>
 
-              <div className="flex flex-col gap-0.5">
-                <h3 className="text-sm font-bold font-display text-m3-on-surface">
-                  {isDragging
-                    ? "Drop your archive here!"
-                    : "Drag & drop your file"}
-                </h3>
-                <p className="text-[11px] text-m3-on-surface-variant max-w-sm">
-                  Supports Instagram{" "}
-                  <span className="font-semibold font-mono text-m3-primary">
-                    .json
-                  </span>{" "}
-                  files, or{" "}
-                  <span className="font-semibold font-mono text-m3-primary">
-                    .zip
-                  </span>{" "}
-                  archives exported directly from Meta.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                disabled={isProcessing}
-                className="mt-1 px-4 py-2 bg-m3-primary text-m3-on-primary hover:bg-opacity-95 rounded-full text-xs font-bold shadow-sm hover:shadow-md transition-all active:scale-95 disabled:bg-m3-outline-variant disabled:text-m3-on-surface-variant"
-              >
-                Select File from Device
-              </button>
-            </div>
-
-            {/* Linear Progress Bar for Processing State */}
-            <AnimatePresence>
-              {isProcessing && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="absolute inset-x-6 bottom-6 flex flex-col items-center gap-1.5"
-                >
-                  <div className="w-full h-1.5 bg-m3-surface-variant rounded-full overflow-hidden">
+                {/* Determinate Linear Progress Bar */}
+                <div className="w-full space-y-2 mt-1">
+                  <div className="w-full h-3 bg-m3-surface-variant/50 rounded-full overflow-hidden border border-m3-outline-variant/20 shadow-inner">
                     {progress ? (
                       <motion.div
                         className="h-full bg-m3-primary rounded-full"
@@ -435,26 +416,92 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
                       />
                     ) : (
                       <div
-                        className="h-full bg-m3-primary w-1/3 rounded-full animate-infinite-slide"
-                        style={{
-                          animationName: "shimmer",
-                          animationDuration: "1.5s",
-                          animationIterationCount: "infinite",
-                          animationTimingFunction: "ease-in-out",
-                        }}
+                        className="h-full bg-m3-primary w-1/3 rounded-full animate-pulse bg-gradient-to-r from-m3-primary/40 to-m3-primary"
                       />
                     )}
                   </div>
-                  <span className="text-[10px] font-semibold text-m3-primary flex items-center gap-1.5">
-                    <RefreshCw size={10} className="animate-spin" />
-                    {progress
-                      ? `Processing posts: ${progress.current} of ${progress.total} (${Math.round((progress.current / progress.total) * 100)}%)`
-                      : "Reading and compiling Instagram dataset..."}
-                  </span>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
+                  <div className="flex justify-between text-[11px] font-mono font-bold text-m3-primary px-0.5">
+                    <span>
+                      {progress ? `Processed: ${progress.current} of ${progress.total} posts` : "Analyzing archives..."}
+                    </span>
+                    <span>
+                      {progress ? `${Math.round((progress.current / progress.total) * 100)}%` : ""}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <motion.div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={triggerFileInput}
+              whileHover={{ scale: 1.01 }}
+              whileTap={{ scale: 0.99 }}
+              className={`relative border border-dashed rounded-[20px] p-6 md:p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-all duration-300 min-h-[220px] ${
+                isDragging
+                  ? "border-m3-primary bg-m3-primary-container/20 shadow-inner"
+                  : "border-m3-outline-variant hover:border-m3-outline hover:bg-m3-surface-container/30 bg-m3-surface-low"
+              }`}
+            >
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept=".json,.zip"
+                onChange={handleFileUpload}
+                disabled={isProcessing}
+                className="hidden"
+              />
+
+              <div className="flex flex-col items-center gap-3">
+                <div
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-colors duration-300 ${
+                    isDragging
+                      ? "bg-m3-primary-container text-m3-on-primary-container"
+                      : "bg-m3-surface-variant text-m3-on-surface-variant"
+                  }`}
+                >
+                  <Upload size={20} />
+                </div>
+
+                <div className="flex flex-col gap-0.5">
+                  <h3 className="text-sm font-bold font-display text-m3-on-surface">
+                    {isDragging ? "Drop your archive here!" : "Drag & drop your file"}
+                  </h3>
+                  <p className="text-[11px] text-m3-on-surface-variant max-w-sm">
+                    Supports Instagram{" "}
+                    <span className="font-semibold font-mono text-m3-primary">.json</span>{" "}
+                    files, or{" "}
+                    <span className="font-semibold font-mono text-m3-primary">.zip</span>{" "}
+                    archives exported directly from Meta.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  disabled={isProcessing}
+                  className="mt-1 px-4 py-2 bg-m3-primary text-m3-on-primary hover:bg-opacity-95 rounded-full text-xs font-bold shadow-sm hover:shadow-md transition-all active:scale-95"
+                >
+                  Select File from Device
+                </button>
+              </div>
+            </motion.div>
+          )}
+
+          {/* Clear Library option inside ImportView if there are existing posts */}
+          {!isProcessing && posts.length > 0 && (
+            <div className="flex justify-center items-center gap-1.5 mt-1 text-xs">
+              <span className="text-m3-on-surface-variant">Already have {posts.length} bookmarks?</span>
+              <button
+                onClick={() => setShowConfirmClear(true)}
+                className="text-red-500 hover:text-red-600 font-semibold hover:underline cursor-pointer flex items-center gap-1 transition-colors"
+              >
+                <Trash2 size={12} />
+                <span>Clear & Start Fresh</span>
+              </button>
+            </div>
+          )}
 
           {/* Status Alerts using M3 container colors */}
           <AnimatePresence mode="wait">
@@ -509,6 +556,84 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
           </AnimatePresence>
         </div>
       </motion.div>
+
+      {/* Confirmation Modal for Clearing Database inside ImportView */}
+      <AnimatePresence>
+        {showConfirmClear && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowConfirmClear(false)}
+              className="fixed inset-0"
+            />
+
+            {/* Modal Box */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-m3-surface rounded-3xl border border-m3-outline-variant max-w-md w-full p-6 shadow-2xl relative z-10 space-y-5"
+            >
+              <div className="flex gap-4">
+                <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-600 flex items-center justify-center shrink-0">
+                  <ShieldAlert size={24} />
+                </div>
+                <div className="space-y-1.5 flex-1">
+                  <h3 className="text-sm font-bold font-display text-m3-on-surface">
+                    Backup Recommended Before Clear
+                  </h3>
+                  <p className="text-xs text-m3-on-surface-variant leading-relaxed">
+                    We strongly recommend creating a backup of your local database before clearing. Once cleared, all saved posts, collections, and custom curation notes will be permanently deleted and **cannot be undone**.
+                  </p>
+                </div>
+              </div>
+
+              {/* Backup Call to Action Box */}
+              <div className="bg-m3-surface-container/50 border border-m3-outline-variant/30 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold text-m3-on-surface">
+                    <Layers size={14} className="text-m3-primary" />
+                    <span>Download Archive</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-m3-outline font-semibold">
+                    {posts.length} records
+                  </span>
+                </div>
+                <p className="text-[11px] text-m3-on-surface-variant leading-normal">
+                  Export your curated library into a JSON file so you can restore or migrate it at any time.
+                </p>
+                <button
+                  onClick={() => {
+                    exportData();
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-white rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs"
+                >
+                  <Layers size={14} />
+                  <span>Download JSON Backup</span>
+                </button>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2 sm:justify-end pt-2">
+                <button
+                  onClick={() => setShowConfirmClear(false)}
+                  className="px-4 py-2 text-xs font-semibold rounded-full border border-m3-outline-variant text-m3-on-surface hover:bg-m3-surface-container cursor-pointer transition-colors text-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleClearAllPosts}
+                  className="px-4 py-2 text-xs font-semibold rounded-full bg-red-600 text-white hover:bg-red-700 cursor-pointer transition-colors shadow-sm text-center"
+                >
+                  Skip Backup & Clear All Posts
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 });

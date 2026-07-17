@@ -12,6 +12,8 @@ import {
   FolderTree,
   Keyboard,
   X,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { usePostStore } from "../../store/useStore";
@@ -37,15 +39,27 @@ export const Shell = ({
 }: ShellProps) => {
   const tShell = VOCABULARY.shell;
   const tShortcuts = VOCABULARY.shortcuts;
-  const {
-    isImporting,
-    importMessage,
-    smartCollections,
-    activePreviewPost,
-    setActivePreviewPost,
-    setIsImportModalOpen,
-  } = usePostStore();
+  const isImporting = usePostStore((state) => state.isImporting);
+  const importMessage = usePostStore((state) => state.importMessage);
+  const smartCollections = usePostStore((state) => state.smartCollections);
+  const activePreviewPost = usePostStore((state) => state.activePreviewPost);
+  const setActivePreviewPost = usePostStore((state) => state.setActivePreviewPost);
+  const setIsImportModalOpen = usePostStore((state) => state.setIsImportModalOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -165,6 +179,30 @@ export const Shell = ({
               </div>
             </div>
             <div className="flex items-center gap-1.5">
+              {/* Online/Offline Connection Status Indicator */}
+              <div
+                className={`relative group p-2.5 rounded-xl flex items-center justify-center border border-m3-outline-variant/10 shadow-xs transition-all duration-300 ${
+                  isOnline
+                    ? "text-emerald-500 dark:text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10"
+                    : "text-amber-500 dark:text-amber-400 bg-amber-500/10 animate-pulse border-amber-500/30"
+                }`}
+                title={isOnline ? "Online" : "Offline Warning"}
+              >
+                {isOnline ? <Wifi size={16} /> : <WifiOff size={16} />}
+                
+                {/* Tooltip */}
+                <div className="pointer-events-none absolute top-full right-0 mt-2 w-52 p-2.5 bg-m3-surface-low border border-m3-outline-variant text-[11px] text-m3-on-surface rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 shadow-glass-md leading-relaxed text-center font-sans font-medium">
+                  {isOnline ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">Online</span>
+                  ) : (
+                    <div>
+                      <span className="text-amber-600 dark:text-amber-400 font-bold block mb-0.5">Offline Warning</span>
+                      Disconnected. Edits will be saved locally, but might not sync immediately.
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <button
                 onClick={() => setIsShortcutsOpen(true)}
                 className="p-2.5 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
@@ -260,6 +298,21 @@ export const Shell = ({
 
       {/* Main Content Area */}
       <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-0 flex flex-col relative">
+        <AnimatePresence>
+          {!isOnline && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="md:hidden bg-amber-500/10 dark:bg-amber-500/5 border-b border-amber-500/20 px-4 py-2 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2 font-medium shrink-0 overflow-hidden select-none"
+            >
+              <WifiOff size={14} className="shrink-0 text-amber-500" />
+              <span className="leading-tight">
+                Offline. Edits saved locally, but won't sync immediately.
+              </span>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {children}
       </main>
 

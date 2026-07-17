@@ -6,6 +6,27 @@ let isWorkerRunning = false;
 let stopRequested = false;
 let globalThrottleUntil: number | null = null;
 
+// Track posts currently visible in the viewport
+const visiblePostIdsSet = new Set<string>();
+
+export function getVisiblePostCount() {
+  return visiblePostIdsSet.size;
+}
+
+export function registerPostVisibility(postId: string, isVisible: boolean) {
+  if (isVisible) {
+    visiblePostIdsSet.add(postId);
+    // If a pending post becomes visible, run worker immediately to prioritize it!
+    const posts = usePostStore.getState().posts;
+    const post = posts.find((p) => p.id === postId);
+    if (post && (post.thumbnailStatus === "pending" || !post.thumbnailStatus)) {
+      runThumbnailWorker();
+    }
+  } else {
+    visiblePostIdsSet.delete(postId);
+  }
+}
+
 export const getThumbnailStats = (posts: Post[]) => {
   const total = posts.length;
   const pending = posts.filter(
@@ -202,6 +223,11 @@ async function autoResetTransientFailures() {
 
 async function executeWorkerLoop() {
   try {
+    // Run storage pruning and self-healing transient resets once on worker startup
+    // to avoid excessive IndexedDB scans, store updates, and server API vacuum requests on every tick.
+    await purgeOldOrFailedStorage();
+    await autoResetTransientFailures();
+
     while (!stopRequested) {
       // Check if throttled globally
       if (globalThrottleUntil && Date.now() < globalThrottleUntil) {
@@ -212,10 +238,6 @@ async function executeWorkerLoop() {
         notifyUI();
         continue;
       }
-
-      // Run periodic IndexedDB storage pruning utility before processing queue
-      await purgeOldOrFailedStorage();
-      await autoResetTransientFailures();
 
       const hasPending = await processQueue();
 
@@ -302,6 +324,22 @@ async function processQueue(): Promise<boolean> {
 
   if (pendingPosts.length === 0 || stopRequested) {
     return false;
+  }
+
+  // Priority Queue: Sort pendingPosts so that those currently in the viewport (visible) are processed first
+  pendingPosts.sort((a, b) => {
+    const aVisible = visiblePostIdsSet.has(a.id);
+    const bVisible = visiblePostIdsSet.has(b.id);
+    if (aVisible && !bVisible) return -1;
+    if (!aVisible && bVisible) return 1;
+    return 0;
+  });
+
+  const visibleCount = pendingPosts.filter((p) => visiblePostIdsSet.has(p.id)).length;
+  if (visibleCount > 0) {
+    console.log(
+      `[Thumbnail Worker Queue] Priority Queue active: prioritized ${visibleCount} visible pending posts at the front of the queue.`
+    );
   }
 
   const CONCURRENCY = 4; // Concurrency control

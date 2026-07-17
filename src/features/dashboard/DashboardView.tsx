@@ -506,7 +506,8 @@ export const DashboardView = React.memo(
     }, [isDownloading]);
 
     // Zustand Store
-    const { setPosts, toggleFavorite } = usePostStore();
+    const setPosts = usePostStore((state) => state.setPosts);
+    const toggleFavorite = usePostStore((state) => state.toggleFavorite);
     const reload = async () => {
       let freshPosts = await db.posts.toArray();
       let hasModified = false;

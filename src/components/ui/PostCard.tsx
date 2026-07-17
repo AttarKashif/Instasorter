@@ -34,7 +34,7 @@ import { usePostStore } from "../../store/useStore";
 import { db } from "../../lib/db";
 import { motion, AnimatePresence } from "motion/react";
 import { InstagramImage } from "./InstagramImage";
-import { retrySingleThumbnail } from "../../lib/thumbnailWorker";
+import { retrySingleThumbnail, registerPostVisibility } from "../../lib/thumbnailWorker";
 import toast from "react-hot-toast";
 import { VOCABULARY } from "../../constants/vocabulary";
 
@@ -127,6 +127,30 @@ export const PostCard = React.memo(
       setNoteText(post.notes || "");
       setSaveStatus("idle");
     }, [post.id, post.notes]);
+
+    // Viewport Intersection observer for prioritizing thumbnail loading
+    const cardRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      const el = cardRef.current;
+      if (!el) return;
+
+      const observer = new IntersectionObserver(
+        ([entry]) => {
+          registerPostVisibility(post.id, entry.isIntersecting);
+        },
+        {
+          rootMargin: "50px 0px", // slight buffer to start fetching before it hits the viewport
+          threshold: 0.01,
+        }
+      );
+
+      observer.observe(el);
+      return () => {
+        observer.unobserve(el);
+        registerPostVisibility(post.id, false);
+      };
+    }, [post.id]);
 
     // Hold peek timer refs
     const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -437,6 +461,7 @@ export const PostCard = React.memo(
     if (!isDetailMode) {
       return (
         <motion.div
+          ref={cardRef}
           layoutId={`post-card-${post.id}`}
           onClick={handleCardClick}
           onMouseEnter={onMouseEnter}
@@ -752,6 +777,7 @@ export const PostCard = React.memo(
 
     return (
       <motion.div
+        ref={cardRef}
         layoutId={`post-card-${post.id}`}
         onClick={handleCardClick}
         onMouseEnter={onMouseEnter}
