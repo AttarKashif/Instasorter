@@ -678,7 +678,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
                     onClick={() => setPostFilterType("all")}
                     className={`px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer ${
                       postFilterType === "all"
-                        ? "bg-m3-primary text-white shadow-xs"
+                        ? "bg-m3-primary text-m3-on-primary shadow-xs"
                         : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                     }`}
                   >
@@ -688,7 +688,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
                     onClick={() => setPostFilterType("image")}
                     className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer ${
                       postFilterType === "image"
-                        ? "bg-m3-primary text-white shadow-xs"
+                        ? "bg-m3-primary text-m3-on-primary shadow-xs"
                         : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                     }`}
                   >
@@ -699,7 +699,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
                     onClick={() => setPostFilterType("video")}
                     className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer ${
                       postFilterType === "video"
-                        ? "bg-m3-primary text-white shadow-xs"
+                        ? "bg-m3-primary text-m3-on-primary shadow-xs"
                         : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                     }`}
                   >
@@ -710,7 +710,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
                     onClick={() => setPostFilterType("carousel")}
                     className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer ${
                       postFilterType === "carousel"
-                        ? "bg-m3-primary text-white shadow-xs"
+                        ? "bg-m3-primary text-m3-on-primary shadow-xs"
                         : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                     }`}
                   >

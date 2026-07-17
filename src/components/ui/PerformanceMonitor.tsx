@@ -92,7 +92,7 @@ export const PerformanceMonitor: React.FC = () => {
             whileHover={{ scale: 1.05 }}
             whileTap={{ scale: 0.95 }}
             onClick={() => setIsOpen(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-m3-surface dark:bg-zinc-900 border border-m3-outline-variant/50 hover:border-m3-primary/30 rounded-full shadow-lg backdrop-blur-md cursor-pointer text-xs font-semibold text-m3-on-surface"
+            className="flex items-center gap-2 px-3 py-2 bg-m3-surface-low/95 border border-m3-outline-variant/40 hover:border-m3-primary/30 rounded-full shadow-lg backdrop-blur-md cursor-pointer text-xs font-semibold text-m3-on-surface"
           >
             <Activity size={14} className="text-emerald-500 animate-pulse" />
             <span className="font-mono text-[11px] font-bold">
@@ -107,7 +107,7 @@ export const PerformanceMonitor: React.FC = () => {
             initial={{ y: 20, opacity: 0, scale: 0.95 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: 20, opacity: 0, scale: 0.95 }}
-            className="w-72 bg-m3-surface dark:bg-zinc-950/90 border border-m3-outline-variant rounded-[20px] p-4 shadow-2xl backdrop-blur-lg space-y-3.5"
+            className="w-72 bg-m3-surface-low/95 border border-m3-outline-variant/40 rounded-[20px] p-4 shadow-2xl backdrop-blur-lg space-y-3.5"
           >
             {/* Header */}
             <div className="flex items-center justify-between border-b border-m3-outline-variant/15 pb-2">

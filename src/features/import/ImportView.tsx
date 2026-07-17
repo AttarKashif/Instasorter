@@ -609,7 +609,7 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
                   onClick={() => {
                     exportData();
                   }}
-                  className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-white rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs"
+                  className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs"
                 >
                   <Layers size={14} />
                   <span>Download JSON Backup</span>

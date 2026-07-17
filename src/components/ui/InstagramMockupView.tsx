@@ -222,12 +222,12 @@ export const InstagramMockupView: React.FC<InstagramMockupViewProps> = ({
             <span className="w-2.5 h-2.5 rounded-full bg-m3-surface-variant border border-neutral-800"></span>
           </div>
 
-          <div className="w-full bg-white text-black rounded-[36px] overflow-hidden flex flex-col">
+          <div className="w-full bg-white dark:bg-black text-black dark:text-white rounded-[36px] overflow-hidden flex flex-col">
             {/* Feed Post Header */}
-            <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100 mt-2">
+            <div className="flex items-center justify-between px-4 py-3 bg-white dark:bg-black border-b border-gray-100 dark:border-neutral-900 mt-2">
               <div className="flex items-center gap-2.5">
                 <div className="bg-gradient-to-tr from-amber-400 via-rose-500 to-purple-600 p-[1.5px] rounded-full">
-                  <div className="bg-white p-[1px] rounded-full">
+                  <div className="bg-white dark:bg-black p-[1px] rounded-full">
                     <div className="w-7 h-7 rounded-full bg-m3-surface-variant text-m3-on-surface font-bold text-[10px] flex items-center justify-center uppercase">
                       {post.creatorUsername.substring(0, 2)}
                     </div>
@@ -386,7 +386,7 @@ export const InstagramMockupView: React.FC<InstagramMockupViewProps> = ({
             </div>
 
             {/* Action Bar */}
-            <div className="px-3 py-2 flex items-center justify-between bg-white">
+            <div className="px-3 py-2 flex items-center justify-between bg-white dark:bg-black">
               <div className="flex items-center gap-3">
                 <button
                   onClick={onToggleFavorite}
@@ -426,7 +426,7 @@ export const InstagramMockupView: React.FC<InstagramMockupViewProps> = ({
             </div>
 
             {/* Feed Engagement Metrics */}
-            <div className="px-3 pb-3 bg-white text-left text-m3-on-surface">
+            <div className="px-3 pb-3 bg-white dark:bg-black text-left text-m3-on-surface">
               {/* Creator Caption line */}
               <div className="mt-1 leading-normal text-[11px] break-words whitespace-pre-wrap">
                 <span className="font-extrabold mr-1.5">

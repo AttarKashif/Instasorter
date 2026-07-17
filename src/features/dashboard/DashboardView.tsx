@@ -1870,7 +1870,7 @@ export const DashboardView = React.memo(
                           Sort &amp; Filter
                         </span>
                         {activeFiltersCount > 0 && (
-                          <span className="w-4 h-4 rounded-full bg-m3-primary text-white text-[9px] font-bold flex items-center justify-center shrink-0">
+                          <span className="w-4 h-4 rounded-full bg-m3-primary text-m3-on-primary text-[9px] font-bold flex items-center justify-center shrink-0">
                             {activeFiltersCount}
                           </span>
                         )}
@@ -1882,7 +1882,7 @@ export const DashboardView = React.memo(
                           onClick={() => setGridDensity("single")}
                           className={`flex items-center justify-center w-10 sm:w-8 h-8 sm:h-7 rounded-md transition-all cursor-pointer ${
                             gridDensity === "single"
-                              ? "bg-m3-primary text-white shadow-xs"
+                              ? "bg-m3-primary text-m3-on-primary shadow-xs"
                               : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                           }`}
                           title="Single column feed (Instagram style)"
@@ -1893,7 +1893,7 @@ export const DashboardView = React.memo(
                           onClick={() => setGridDensity("double")}
                           className={`flex items-center justify-center w-10 sm:w-8 h-8 sm:h-7 rounded-md transition-all cursor-pointer ${
                             gridDensity === "double"
-                              ? "bg-m3-primary text-white shadow-xs"
+                              ? "bg-m3-primary text-m3-on-primary shadow-xs"
                               : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                           }`}
                           title="Two-column masonry grid"
@@ -1904,7 +1904,7 @@ export const DashboardView = React.memo(
                           onClick={() => setGridDensity("list")}
                           className={`flex items-center justify-center w-10 sm:w-8 h-8 sm:h-7 rounded-md transition-all cursor-pointer ${
                             gridDensity === "list"
-                              ? "bg-m3-primary text-white shadow-xs"
+                              ? "bg-m3-primary text-m3-on-primary shadow-xs"
                               : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                           }`}
                           title="Compact list layout"
@@ -2279,7 +2279,7 @@ export const DashboardView = React.memo(
                       <button
                         type="button"
                         disabled={demoLoading}
-                        className="mt-6 py-2.5 px-5 bg-m3-primary text-white rounded-full font-bold text-xs shadow-sm hover:shadow-md flex items-center justify-center gap-1.5 relative z-10"
+                        className="mt-6 py-2.5 px-5 bg-m3-primary text-m3-on-primary rounded-full font-bold text-xs shadow-sm hover:shadow-md flex items-center justify-center gap-1.5 relative z-10"
                       >
                         {demoLoading
                           ? "Seeding data..."
@@ -2616,7 +2616,7 @@ export const DashboardView = React.memo(
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.8, y: 15 }}
                 onClick={scrollToTop}
-                className="fixed bottom-24 md:bottom-8 right-6 z-40 w-12 h-12 rounded-full bg-m3-primary text-white hover:bg-m3-primary/90 flex items-center justify-center shadow-xl hover:scale-110 active:scale-95 transition-all cursor-pointer border border-white/10"
+                className="fixed bottom-24 md:bottom-8 right-6 z-40 w-12 h-12 rounded-full bg-m3-primary text-m3-on-primary hover:bg-m3-primary/90 flex items-center justify-center shadow-xl hover:scale-110 active:scale-95 transition-all cursor-pointer border border-white/10"
                 title="Scroll back to top"
               >
                 <ArrowUp size={20} className="stroke-[2.5]" />

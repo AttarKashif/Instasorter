@@ -166,7 +166,7 @@ export const Shell = ({
           {/* App Header branding */}
           <div className="px-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-m3-primary flex items-center justify-center text-white shadow-sm">
+              <div className="w-10 h-10 rounded-xl bg-m3-primary flex items-center justify-center text-m3-on-primary shadow-sm">
                 <Layers size={22} className="stroke-[2.5]" />
               </div>
               <div>
@@ -202,6 +202,26 @@ export const Shell = ({
                   )}
                 </div>
               </div>
+
+              {onThemeToggle && (
+                <button
+                  onClick={onThemeToggle}
+                  className="p-2.5 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
+                  title={`Switch to ${theme === "light" ? "Dark Room" : "Crisp Studio"}`}
+                >
+                  <AnimatePresence mode="wait">
+                    <motion.div
+                      key={theme}
+                      initial={{ rotate: -90, scale: 0.8, opacity: 0 }}
+                      animate={{ rotate: 0, scale: 1, opacity: 1 }}
+                      exit={{ rotate: 90, scale: 0.8, opacity: 0 }}
+                      transition={{ type: "spring", stiffness: 200, damping: 20 }}
+                    >
+                      {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
+                    </motion.div>
+                  </AnimatePresence>
+                </button>
+              )}
 
               <button
                 onClick={() => setIsShortcutsOpen(true)}
@@ -551,7 +571,7 @@ export const Shell = ({
               <div className="px-6 py-4 bg-m3-surface-low border-t border-m3-outline-variant/15 flex justify-end">
                 <button
                   onClick={() => setIsShortcutsOpen(false)}
-                  className="px-4 py-2 rounded-full bg-m3-primary hover:bg-opacity-90 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  className="px-4 py-2 rounded-full bg-m3-primary hover:bg-opacity-90 text-m3-on-primary text-xs font-bold shadow-xs cursor-pointer"
                 >
                   {tShortcuts.gotIt}
                 </button>

@@ -662,7 +662,7 @@ export const SettingsView = React.memo(
 
               <button
                 onClick={exportData}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-m3-primary text-white hover:shadow-md hover:bg-opacity-95 rounded-full transition-all cursor-pointer shadow-xs shrink-0 active:scale-95"
+                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-m3-primary text-m3-on-primary hover:shadow-md hover:bg-opacity-95 rounded-full transition-all cursor-pointer shadow-xs shrink-0 active:scale-95"
               >
                 <Layers size={12} />
                 <span>Export JSON</span>
@@ -689,7 +689,7 @@ export const SettingsView = React.memo(
                   onClick={() => setActiveTab(tab.id)}
                   className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold transition-all cursor-pointer border shrink-0 ${
                     isActive
-                      ? "bg-m3-primary text-white border-m3-primary shadow-sm"
+                      ? "bg-m3-primary text-m3-on-primary border-m3-primary shadow-sm"
                       : "bg-m3-surface border-m3-outline-variant/60 text-m3-on-surface-variant hover:text-m3-on-surface"
                   }`}
                 >
@@ -697,7 +697,7 @@ export const SettingsView = React.memo(
                   <span>{tab.label}</span>
                   {tab.badge !== undefined && tab.badge > 0 && (
                     <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full leading-none ${
-                      isActive ? "bg-white text-m3-primary" : "bg-red-500 text-white animate-pulse"
+                      isActive ? "bg-m3-on-primary text-m3-primary" : "bg-red-500 text-white animate-pulse"
                     }`}>
                       {tab.badge}
                     </span>
@@ -725,7 +725,7 @@ export const SettingsView = React.memo(
                     }`}
                   >
                     <div className={`p-2 rounded-xl transition-all ${
-                      isActive ? "bg-m3-primary text-white" : "bg-m3-surface-container text-m3-outline group-hover:text-m3-on-surface"
+                      isActive ? "bg-m3-primary text-m3-on-primary" : "bg-m3-surface-container text-m3-outline group-hover:text-m3-on-surface"
                     }`}>
                       <Icon size={16} />
                     </div>
@@ -886,7 +886,7 @@ export const SettingsView = React.memo(
                         message: "Backup export completed successfully!",
                       });
                     }}
-                    className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-white rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs active:scale-95"
+                    className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs active:scale-95"
                   >
                     <Layers size={14} />
                     <span>Download JSON Backup</span>
@@ -960,7 +960,7 @@ export const SettingsView = React.memo(
                         message: "Backup export completed successfully!",
                       });
                     }}
-                    className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-white rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs active:scale-95"
+                    className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs active:scale-95"
                   >
                     <Layers size={14} />
                     <span>Download JSON Backup First</span>
