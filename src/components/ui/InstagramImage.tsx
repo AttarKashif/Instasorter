@@ -40,6 +40,27 @@ const getInitialImgSrc = (post: Post): string => {
   return "";
 };
 
+const getDeterministicPalette = (id: string): string[] => {
+  let h1 = 0;
+  let h2 = 0;
+  let h3 = 0;
+  for (let i = 0; i < id.length; i++) {
+    const char = id.charCodeAt(i);
+    h1 = char + ((h1 << 5) - h1);
+    h2 = char * 13 + ((h2 << 3) - h2);
+    h3 = char * 23 + ((h3 << 7) - h3);
+  }
+  
+  const getPastelColor = (hash: number, offset: number) => {
+    const r = Math.abs((hash + offset) % 100) + 120; // 120-220 for bright, elegant pastels
+    const g = Math.abs(((hash >> 8) + offset) % 100) + 120;
+    const b = Math.abs(((hash >> 16) + offset) % 100) + 120;
+    return `rgb(${r}, ${g}, ${b})`;
+  };
+
+  return [getPastelColor(h1, 10), getPastelColor(h2, 50), getPastelColor(h3, 90)];
+};
+
 export const InstagramImage = ({
   post,
   className,
@@ -131,9 +152,10 @@ export const InstagramImage = ({
     })
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && data.path) {
+        if (data.success && (data.dataUrl || data.path)) {
+          const finalUrl = data.dataUrl || data.path;
           const updatedFields: Partial<Post> = {
-            thumbnailUrl: data.path,
+            thumbnailUrl: finalUrl,
             thumbnailStatus: "success",
           };
           if (
@@ -173,8 +195,24 @@ export const InstagramImage = ({
   // If the live image failed to load, and not a local base64/data URI,
   // render our gorgeous metadata-driven custom placeholder card.
   if (hasFailed && !isDataUri) {
+    const fallbackPalette = post.colorPalette && post.colorPalette.length >= 2
+      ? post.colorPalette
+      : getDeterministicPalette(post.id);
+
+    const fallbackGradientStyle = {
+      background: `radial-gradient(circle at 20% 20%, ${fallbackPalette[0]} 0%, transparent 60%),
+                   radial-gradient(circle at 80% 30%, ${fallbackPalette[1]} 0%, transparent 60%),
+                   radial-gradient(circle at 40% 80%, ${fallbackPalette[2] || fallbackPalette[0]} 0%, transparent 70%),
+                   var(--m3-surface-low)`,
+      filter: "blur(28px) saturate(1.1)",
+      transform: "scale(1.25)",
+    };
+
     return (
-      <div className="w-full h-full flex flex-col justify-between p-5 text-center select-none bg-m3-surface-container border border-m3-outline-variant/20 rounded-[inherit] relative overflow-hidden group/placeholder">
+      <div className="w-full h-full flex flex-col justify-between p-5 text-center select-none bg-m3-surface-container/60 border border-m3-outline-variant/20 rounded-[inherit] relative overflow-hidden group/placeholder">
+        {/* Ambient background blur */}
+        <div className="absolute inset-0 z-0 pointer-events-none opacity-30 dark:opacity-20 mix-blend-multiply dark:mix-blend-normal" style={fallbackGradientStyle} />
+        
         {/* Header/Badge */}
         <div className="flex items-center justify-between w-full opacity-80 text-[9px] font-mono tracking-wider text-m3-outline uppercase relative z-10">
           <span className="flex items-center gap-1 font-semibold text-m3-primary">
@@ -214,21 +252,50 @@ export const InstagramImage = ({
     );
   }
 
+  const palette = post.colorPalette && post.colorPalette.length >= 2
+    ? post.colorPalette
+    : getDeterministicPalette(post.id);
+
+  const gradientStyle = {
+    background: `radial-gradient(circle at 20% 20%, ${palette[0]} 0%, transparent 60%),
+                 radial-gradient(circle at 80% 30%, ${palette[1]} 0%, transparent 60%),
+                 radial-gradient(circle at 40% 80%, ${palette[2] || palette[0]} 0%, transparent 70%),
+                 var(--m3-surface-low)`,
+    filter: "blur(28px) saturate(1.3)",
+    transform: "scale(1.2)",
+  };
+
   return (
-    <div ref={containerRef} className="w-full h-full relative overflow-hidden">
-      {/* Loading overlay/skeleton */}
-      {(!isInView || !isLoaded) && (
-        <div className="absolute inset-0 bg-m3-surface-container flex items-center justify-center animate-pulse z-10">
-          <ImageIcon size={24} className="text-m3-outline/25 stroke-[1.5]" />
+    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-m3-surface-container">
+      {/* Dynamic Blur-up Gradient Placeholder */}
+      <div 
+        className={`absolute inset-0 z-0 transition-opacity duration-700 ease-in-out ${
+          isLoaded ? "opacity-0 pointer-events-none" : "opacity-100"
+        }`}
+        style={gradientStyle}
+      />
+
+      {/* Center Decorative Loading Icon Overlay */}
+      <div 
+        className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity duration-500 pointer-events-none ${
+          isLoaded ? "opacity-0" : "opacity-100 animate-pulse"
+        }`}
+      >
+        <div className="p-2.5 rounded-full bg-white/20 dark:bg-black/20 backdrop-blur-md border border-white/10 shadow-xs">
+          <ImageIcon size={20} className="text-white/80 dark:text-white/60 stroke-[1.5]" />
         </div>
-      )}
+      </div>
 
       {/* Actual image */}
       {isInView && (
         <img
           src={imgSrc || undefined}
           alt={alt || post.caption || "Instagram Media"}
-          className={`${className} transition-all duration-700 ${isLoaded ? "opacity-100 blur-0" : "opacity-0 blur-lg"}`}
+          loading="lazy"
+          decoding="async"
+          className={`${className} relative z-20 transition-all duration-700 ease-in-out ${
+            isLoaded ? "opacity-100 blur-0 scale-100" : "opacity-0 blur-md scale-95"
+          }`}
           onError={handleError}
           onLoad={(e) => {
             const nw = e.currentTarget.naturalWidth;
@@ -245,6 +312,73 @@ export const InstagramImage = ({
                 ratio:
                   e.currentTarget.naturalWidth / e.currentTarget.naturalHeight,
               });
+            }
+
+            // Extract dominant colors only if palette is missing/incomplete
+            if (nw > 10 && nh > 10 && (!post.colorPalette || post.colorPalette.length < 2)) {
+              const imgEl = e.currentTarget;
+              setTimeout(() => {
+                try {
+                  const canvas = document.createElement("canvas");
+                  const ctx = canvas.getContext("2d");
+                  if (ctx) {
+                    canvas.width = 30;
+                    canvas.height = 30;
+                    ctx.drawImage(imgEl, 0, 0, 30, 30);
+                    const imageData = ctx.getImageData(0, 0, 30, 30).data;
+                    
+                    const colorCounts: Record<string, number> = {};
+                    for (let i = 0; i < imageData.length; i += 4) {
+                      const r = imageData[i];
+                      const g = imageData[i + 1];
+                      const b = imageData[i + 2];
+                      const a = imageData[i + 3];
+                      if (a < 150) continue; // skip transparent
+                      
+                      const qr = Math.max(0, Math.min(255, Math.round(r / 20) * 20));
+                      const qg = Math.max(0, Math.min(255, Math.round(g / 20) * 20));
+                      const qb = Math.max(0, Math.min(255, Math.round(b / 20) * 20));
+                      const hex = "#" + [qr, qg, qb].map(x => {
+                        const h = x.toString(16);
+                        return h.length === 1 ? "0" + h : h;
+                      }).join("");
+                      
+                      colorCounts[hex] = (colorCounts[hex] || 0) + 1;
+                    }
+                    
+                    const sorted = Object.keys(colorCounts).sort((a, b) => colorCounts[b] - colorCounts[a]);
+                    const palette: string[] = [];
+                    for (const color of sorted) {
+                      if (palette.length >= 4) break;
+                      const isDistinct = palette.every(existingColor => {
+                        const r1 = parseInt(existingColor.substring(1, 3), 16);
+                        const g1 = parseInt(existingColor.substring(3, 5), 16);
+                        const b1 = parseInt(existingColor.substring(5, 7), 16);
+                        const r2 = parseInt(color.substring(1, 3), 16);
+                        const g2 = parseInt(color.substring(3, 5), 16);
+                        const b2 = parseInt(color.substring(5, 7), 16);
+                        const diff = Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+                        return diff > 45; // threshold
+                      });
+                      if (isDistinct || palette.length === 0) {
+                        palette.push(color);
+                      }
+                    }
+                    
+                    if (palette.length > 0) {
+                      const currentPaletteStr = JSON.stringify(post.colorPalette || []);
+                      const newPaletteStr = JSON.stringify(palette);
+                      if (currentPaletteStr !== newPaletteStr) {
+                        db.posts.update(post.id, { colorPalette: palette }).catch(() => {});
+                        usePostStore.getState().updatePost(post.id, { colorPalette: palette });
+                      }
+                    }
+                  }
+                } catch (canvasErr) {
+                  // Gracefully ignore Canvas security/CORS block and retain fallback
+                  console.debug("Canvas color extraction skipped due to CORS/security policy:", canvasErr);
+                }
+              }, 100);
             }
           }}
           referrerPolicy="no-referrer"

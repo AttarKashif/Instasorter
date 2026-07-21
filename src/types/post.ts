@@ -24,9 +24,12 @@ export interface Post {
   thumbnailStatus?: "pending" | "success" | "failed";
   lastThumbnailAttempt?: Date;
   thumbnailAttempts?: number;
+  visibility?: "visible" | "hidden";
 
   // Rich interactive mockup additions
+  colorPalette?: string[];
   additionalSlides?: string[];
+  mediaCount?: number;
   instagramLikes?: number;
   location?: string;
   comments?: {

@@ -451,6 +451,24 @@ export const extractCreatorUsername = (raw: any): string => {
   return extractOwnerDetails(raw).creatorUsername;
 };
 
+export const getDeterministicPalette = (id?: string | null): string[] => {
+  const palettes = [
+    ["#475569", "#334155", "#1e293b", "#0f172a"], // Slate Neutral
+    ["#3b82f6", "#2563eb", "#1d4ed8", "#1e40af"], // Cobalt
+    ["#14b8a6", "#0d9488", "#0f766e", "#115e59"], // Sage Teal
+    ["#f97316", "#ea580c", "#c2410c", "#9a3412"], // Terracotta Amber
+    ["#8b5cf6", "#7c3aed", "#6d28d9", "#5b21b6"], // Lavender Purple
+    ["#10b981", "#059669", "#047857", "#065f46"], // Emerald Green
+  ];
+  const safeId = String(id || "");
+  let hash = 0;
+  for (let i = 0; i < safeId.length; i++) {
+    hash = safeId.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % palettes.length;
+  return palettes[index];
+};
+
 export const normalizeInstagramPost = (raw: any): Post => {
   // 1. Extract and Clean Post URL (extremely thorough fallback keys)
   let rawPostUrl = raw.postUrl || raw.url || raw.href || raw.instagramUrl || "";
@@ -635,7 +653,7 @@ export const normalizeInstagramPost = (raw: any): Post => {
   if (postUrl) {
     id = postUrl;
   } else if (raw.id) {
-    id = raw.id;
+    id = String(raw.id);
     if (id.startsWith("http://") || id.startsWith("https://")) {
       id = cleanInstagramUrl(id);
     }
@@ -835,8 +853,10 @@ export const normalizeInstagramPost = (raw: any): Post => {
     savedAt: savedAtStr,
     mediaType,
     thumbnailUrl,
+    colorPalette: raw.colorPalette || getDeterministicPalette(id),
     additionalSlides:
       additionalSlides.length > 0 ? additionalSlides : undefined,
+    mediaCount: raw.mediaCount || (additionalSlides.length > 0 ? 1 + additionalSlides.length : 1),
     tags: tags.map(decodeInstagramText),
     collections: collections.map(decodeInstagramText),
     isFavorite: !!raw.isFavorite,
@@ -951,6 +971,7 @@ export const normalizeInstagramPostAsync = async (
       }
       if (resolvedSlides.length > 0) {
         post.additionalSlides = resolvedSlides;
+        post.mediaCount = 1 + resolvedSlides.length;
       }
     }
   }

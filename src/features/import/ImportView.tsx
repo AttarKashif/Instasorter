@@ -1,6 +1,7 @@
 import React, { useState, useRef } from "react";
 import JSZip from "jszip";
 import { db } from "../../lib/db";
+import { triggerVibration } from "../../lib/vibrate";
 import {
   normalizeInstagramPost,
   normalizeInstagramPostAsync,
@@ -19,6 +20,7 @@ import {
   Layers,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import toast from "react-hot-toast";
 
 interface ImportViewProps {
   onClose?: () => void;
@@ -61,6 +63,7 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
 
   const handleClearAllPosts = async () => {
     try {
+      triggerVibration("warning");
       await db.posts.clear();
       setPosts([]);
       setShowConfirmClear(false);
@@ -126,45 +129,74 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
         }
 
         const extractFromObj = (obj: any) => {
+          if (!obj) return;
+
+          // Helper to process a single collection object
+          const processCollection = (col: any) => {
+            const colName = col.name || "";
+            const items = col.media || col.media_list_data || col.saved_saved_media || col.media_list || col.posts || [];
+            if (Array.isArray(items)) {
+              items.forEach((item: any) => {
+                const currentCols = item.collections || [];
+                if (colName && !currentCols.includes(colName)) {
+                  currentCols.push(colName);
+                }
+                allExtractedRaws.push({
+                  ...item,
+                  collections: currentCols,
+                });
+              });
+            }
+          };
+
+          // Helper to check if an object represents a Collection
+          const isCollectionObj = (item: any) => {
+            if (!item || typeof item !== "object") return false;
+            const hasName = typeof item.name === "string" && item.name.length > 0;
+            const hasMediaArray = Array.isArray(item.media) || 
+                                  Array.isArray(item.media_list_data) || 
+                                  Array.isArray(item.saved_saved_media) || 
+                                  Array.isArray(item.media_list) || 
+                                  Array.isArray(item.posts);
+            return hasName && hasMediaArray;
+          };
+
           if (Array.isArray(obj)) {
-            allExtractedRaws.push(...obj);
+            obj.forEach((item: any) => {
+              if (isCollectionObj(item)) {
+                processCollection(item);
+              } else {
+                allExtractedRaws.push(item);
+              }
+            });
             return;
           }
 
-          // Case A: saved_saved_media array (standard saved posts)
+          // Case A: saved_saved_media array (standard saved posts wrapper)
           if (obj.saved_saved_media && Array.isArray(obj.saved_saved_media)) {
             allExtractedRaws.push(...obj.saved_saved_media);
           }
 
-          // Case B: saved_collections array (saved collections)
+          // Case B: saved_collections array (saved collections wrapper)
           if (obj.saved_collections && Array.isArray(obj.saved_collections)) {
             obj.saved_collections.forEach((col: any) => {
-              const colName = col.name || "";
-              const items = col.media_list_data || col.saved_saved_media || [];
-              if (Array.isArray(items)) {
-                items.forEach((item: any) => {
-                  // Tag with collection name
-                  const currentCols = item.collections || [];
-                  if (colName && !currentCols.includes(colName)) {
-                    currentCols.push(colName);
-                  }
-                  allExtractedRaws.push({
-                    ...item,
-                    collections: currentCols,
-                  });
-                });
-              }
+              processCollection(col);
             });
           }
 
-          // Case C: General fallback - find any nested array that doesn't match keys above
+          // Case C: General fallback - search any nested key that contains arrays
           if (!obj.saved_saved_media && !obj.saved_collections) {
-            const possibleArray = Object.entries(obj).find(([k, v]) =>
-              Array.isArray(v),
-            );
-            if (possibleArray) {
-              allExtractedRaws.push(...(possibleArray[1] as any[]));
-            }
+            Object.entries(obj).forEach(([key, val]) => {
+              if (Array.isArray(val)) {
+                val.forEach((item: any) => {
+                  if (isCollectionObj(item)) {
+                    processCollection(item);
+                  } else {
+                    allExtractedRaws.push(item);
+                  }
+                });
+              }
+            });
           }
         };
 
@@ -308,6 +340,10 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
         body: JSON.stringify({ posts: queuePayload }),
       }).catch((err) => console.warn("Failed to queue background scrape", err));
 
+      toast.success(`Successfully imported ${finalNormalizedPosts.length} posts!`, {
+        icon: "📥",
+      });
+
       setImportStatus({
         type: "success",
         message: `Successfully imported ${finalNormalizedPosts.length} unique posts from your Instagram export! We successfully mapped your usernames, saved dates, and extracted the original high-resolution post images directly from the archive!`,
@@ -315,12 +351,11 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
       });
     } catch (error) {
       console.error(error);
+      const errMsg = error instanceof Error ? error.message : "An unknown error occurred during import.";
+      toast.error(errMsg);
       setImportStatus({
         type: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "An unknown error occurred during import.",
+        message: errMsg,
       });
     } finally {
       setIsProcessing(false);

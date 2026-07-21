@@ -3,26 +3,23 @@ import { Post } from "../types/post";
 import { db } from "../lib/db";
 
 export function useFullPost(post: Post) {
-  const [fullPost, setFullPost] = useState<Post>(post);
+  const [dbPost, setDbPost] = useState<Post | null>(null);
 
   useEffect(() => {
-    let isSubscribed = true;
-    
-    // Only load from DB if it has a placeholder thumbnail
     if (post.thumbnailUrl === "base64-placeholder" || !post.thumbnailUrl) {
+      let isSubscribed = true;
       db.posts.get(post.id).then((p) => {
         if (isSubscribed && p) {
-          setFullPost(p);
+          setDbPost(p);
         }
       });
+      return () => {
+        isSubscribed = false;
+      };
     } else {
-      setFullPost(post);
+      setDbPost(null);
     }
-    
-    return () => {
-      isSubscribed = false;
-    };
-  }, [post.id, post.thumbnailUrl, post]);
+  }, [post.id, post.thumbnailUrl]);
 
-  return fullPost;
+  return (post.thumbnailUrl === "base64-placeholder" || !post.thumbnailUrl) && dbPost ? dbPost : post;
 }

@@ -71,11 +71,11 @@ export const VOCABULARY = {
       "Supports raw JSON (saved_posts.json) or full ZIP exports downloaded from Meta.",
     selectFileBtn: "Select File manually",
     loadingText: "Parsing files and indexing data...",
-    successText: "Successfully imported metadata and queued image scraping!",
+    successText: "Successfully imported metadata and queued image downloading!",
     failedText: "Invalid Instagram export structure. Please check file format.",
     scrapeStatusTitle: "Background Thumbnail Downloader",
     scrapeStatusDesc:
-      "Active media scraper retrieves real-time preview thumbnails securely.",
+      "Active Background Downloader retrieves real-time preview thumbnails securely.",
     scrapeCompleted: "Completed",
     scrapeActive: "Active worker downloading previews...",
     importArchive: "Import Instagram Archive",
@@ -242,22 +242,6 @@ export const VOCABULARY = {
     collectionsPlaceholder: "Press enter to add to collection",
     cancelBtn: "Cancel",
     submitBtn: "Add to Library",
-  },
-  mockup: {
-    noCaption: "No caption context available",
-    save: "Save",
-    noPreview: "No visual preview",
-    simulatedComments: "Simulated Comments",
-    noComments: "No comments yet",
-    addCityPlace: "Add city/place...",
-    addLocation: "Add location...",
-    linkCopied: "Link copied successfully!",
-    commentHelp:
-      "Add comments, hashtags, or notes to populate this active feed card thread.",
-    noCommentsHelp:
-      "Type a comment below to start a mock social thread on this bookmark.",
-    commentPlaceholder: "Write a comment...",
-    postBtn: "Post",
   },
   postcard: {
     addToCollection: "Add to Collection",

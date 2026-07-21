@@ -13,6 +13,7 @@ import { Post } from "../../types/post";
 import { usePostStore } from "../../store/useStore";
 import { db } from "../../lib/db";
 import { InstagramImage } from "./InstagramImage";
+import { getSubtlePaletteColor } from "../../lib/highlight";
 
 interface TelegramQuickPeekProps {
   post: Post | null;
@@ -27,6 +28,8 @@ export const TelegramQuickPeek = ({
 
   const toggleFavorite = usePostStore((state) => state.toggleFavorite);
   const [copied, setCopied] = useState(false);
+
+  const subtleBg = getSubtlePaletteColor(post.colorPalette, "var(--m3-surface)");
 
   const handleToggleFavorite = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -57,6 +60,7 @@ export const TelegramQuickPeek = ({
         animate={{ scale: 1, y: 0 }}
         exit={{ scale: 0.9, y: 15 }}
         transition={{ type: "spring", stiffness: 450, damping: 28 }}
+        style={subtleBg ? { backgroundColor: subtleBg } : undefined}
         className="relative bg-m3-surface rounded-[24px] overflow-hidden border border-m3-outline-variant/30 shadow-2xl w-full max-w-sm flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
@@ -73,7 +77,7 @@ export const TelegramQuickPeek = ({
                 @{post.creatorUsername}
               </h4>
               <p className="text-[10px] text-m3-outline font-semibold">
-                Telegram Quick Peek
+                Quick Peek Preview
               </p>
             </div>
           </div>

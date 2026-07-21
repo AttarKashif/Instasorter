@@ -14,11 +14,21 @@ import {
   X,
   Wifi,
   WifiOff,
+  Search,
+  Image,
+  Download,
+  Smartphone,
+  CheckCircle2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { usePostStore } from "../../store/useStore";
 import { VOCABULARY } from "../../constants/vocabulary";
 import { TelegramQuickPeek } from "../ui/TelegramQuickPeek";
+import {
+  isWorkerActive,
+  registerProgressCallback,
+  unregisterProgressCallback,
+} from "../../lib/thumbnailWorker";
 
 type ViewType = "home" | "analytics" | "settings" | "grouped";
 
@@ -47,6 +57,87 @@ export const Shell = ({
   const setIsImportModalOpen = usePostStore((state) => state.setIsImportModalOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [isInstallable, setIsInstallable] = useState(() => typeof window !== "undefined" && Boolean(window.deferredPrompt));
+  const [isStandalone, setIsStandalone] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return (
+      window.matchMedia("(display-mode: standalone)").matches ||
+      (navigator as any).standalone === true
+    );
+  });
+
+  useEffect(() => {
+    const handleInstallable = () => setIsInstallable(true);
+    const handleInstalled = () => {
+      setIsInstallable(false);
+      setIsStandalone(true);
+    };
+
+    window.addEventListener("app-installable", handleInstallable);
+    window.addEventListener("app-installed", handleInstalled);
+
+    if (window.deferredPrompt) {
+      setIsInstallable(true);
+    }
+
+    return () => {
+      window.removeEventListener("app-installable", handleInstallable);
+      window.removeEventListener("app-installed", handleInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (window.deferredPrompt) {
+      window.deferredPrompt.prompt();
+      const choice = await window.deferredPrompt.userChoice;
+      if (choice.outcome === "accepted") {
+        setIsInstallable(false);
+        setIsStandalone(true);
+      }
+      window.deferredPrompt = null;
+    }
+  };
+
+  const [workerActive, setWorkerActive] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [initialPending, setInitialPending] = useState(0);
+  const posts = usePostStore((state) => state.posts);
+
+  // Update pending counts and active status whenever posts change or on mount/intervals
+  useEffect(() => {
+    const pending = posts.filter(
+      (p) => p.thumbnailStatus === "pending" || !p.thumbnailStatus,
+    ).length;
+    setPendingCount(pending);
+
+    // If no more pending, reset initialPending
+    if (pending === 0) {
+      setInitialPending(0);
+    } else if (initialPending === 0 || pending > initialPending) {
+      // Set or expand initial pending count when a batch starts or grows
+      setInitialPending(pending);
+    }
+
+    setWorkerActive(isWorkerActive());
+  }, [posts, initialPending]);
+
+  // Subscribe to progress notifications from the background worker loop
+  useEffect(() => {
+    const handleProgress = () => {
+      setWorkerActive(isWorkerActive());
+    };
+    registerProgressCallback(handleProgress);
+    handleProgress();
+    return () => {
+      unregisterProgressCallback();
+    };
+  }, []);
+
+  const progressPercent = initialPending > 0 
+    ? Math.min(100, Math.max(5, ((initialPending - pendingCount) / initialPending) * 100))
+    : 0;
+
+
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -160,6 +251,64 @@ export const Shell = ({
 
   return (
     <div className="h-[100dvh] overflow-hidden text-m3-on-surface flex flex-col md:flex-row font-sans selection:bg-m3-primary-container selection:text-m3-on-primary-container">
+      {/* Persistent Global Progress Bar */}
+      {workerActive && pendingCount > 0 && (
+        <div className="fixed top-0 left-0 right-0 h-[3px] bg-m3-primary/10 z-50 pointer-events-none">
+          <motion.div
+            className="h-full bg-m3-primary"
+            style={{ width: `${progressPercent}%` }}
+            initial={{ width: "0%" }}
+            animate={{ width: `${progressPercent}%` }}
+            transition={{ type: "spring", stiffness: 80, damping: 20 }}
+          />
+        </div>
+      )}
+
+      {/* Mobile Sticky Top Header */}
+      <header className="md:hidden sticky top-0 z-40 w-full flex flex-col bg-m3-surface/95 backdrop-blur-xl border-b border-m3-outline-variant/30 px-4 py-3 shrink-0">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-m3-primary flex items-center justify-center text-m3-on-primary">
+              <Layers size={16} className="stroke-[2.5]" />
+            </div>
+            <span className="font-bold font-display text-base text-m3-on-surface leading-none">
+              Instasorter
+            </span>
+          </div>
+          
+          <div className="flex items-center gap-2">
+            {isInstallable && (
+              <button
+                onClick={handleInstallClick}
+                className="px-2.5 py-1.5 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-semibold flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
+                title="Install Instasorter PWA"
+              >
+                <Download size={13} />
+                <span>Install</span>
+              </button>
+            )}
+
+            {onThemeToggle && (
+              <button
+                onClick={onThemeToggle}
+                className="p-2 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
+              >
+                {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
+              </button>
+            )}
+            
+            <button
+              onClick={() => setIsShortcutsOpen(true)}
+              className="p-2 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
+            >
+              <Keyboard size={14} />
+            </button>
+          </div>
+        </div>
+        
+
+      </header>
+
       {/* Material 3 Desktop Navigation Drawer */}
       <nav className="hidden md:flex w-72 bg-m3-surface border-r border-m3-outline-variant/40 shadow-sm z-10 px-4 py-8 flex-col justify-between sticky top-0 h-screen shrink-0">
         <div className="flex flex-col gap-8">
@@ -179,30 +328,6 @@ export const Shell = ({
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              {/* Online/Offline Connection Status Indicator */}
-              <div
-                className={`relative group p-2.5 rounded-xl flex items-center justify-center border border-m3-outline-variant/10 shadow-xs transition-all duration-300 ${
-                  isOnline
-                    ? "text-emerald-500 dark:text-emerald-400 bg-emerald-500/5 hover:bg-emerald-500/10"
-                    : "text-amber-500 dark:text-amber-400 bg-amber-500/10 animate-pulse border-amber-500/30"
-                }`}
-                title={isOnline ? "Online" : "Offline Warning"}
-              >
-                {isOnline ? <Wifi size={16} /> : <WifiOff size={16} />}
-                
-                {/* Tooltip */}
-                <div className="pointer-events-none absolute top-full right-0 mt-2 w-52 p-2.5 bg-m3-surface-low border border-m3-outline-variant text-[11px] text-m3-on-surface rounded-xl opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-50 shadow-glass-md leading-relaxed text-center font-sans font-medium">
-                  {isOnline ? (
-                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">Online</span>
-                  ) : (
-                    <div>
-                      <span className="text-amber-600 dark:text-amber-400 font-bold block mb-0.5">Offline Warning</span>
-                      Disconnected. Edits will be saved locally, but might not sync immediately.
-                    </div>
-                  )}
-                </div>
-              </div>
-
               {onThemeToggle && (
                 <button
                   onClick={onThemeToggle}
@@ -232,6 +357,8 @@ export const Shell = ({
               </button>
             </div>
           </div>
+
+
 
           {/* Navigation Items */}
           <div className="flex flex-col gap-1">
@@ -308,8 +435,28 @@ export const Shell = ({
           </div>
         </div>
 
-        {/* Footer info matching M3's modest branding style */}
-        <div className="px-4 py-2 border-t border-m3-outline-variant/20 flex flex-col gap-1 mt-auto">
+        {/* Footer info & PWA status matching M3's modest branding style */}
+        <div className="px-4 py-3 border-t border-m3-outline-variant/20 flex flex-col gap-2 mt-auto">
+          {isInstallable && (
+            <button
+              onClick={handleInstallClick}
+              className="w-full py-2 px-3 rounded-2xl bg-m3-primary-container text-m3-on-primary-container hover:bg-m3-primary hover:text-m3-on-primary text-xs font-semibold flex items-center justify-between transition-all duration-200 cursor-pointer shadow-xs group"
+            >
+              <div className="flex items-center gap-2">
+                <Download size={14} className="group-hover:translate-y-0.5 transition-transform" />
+                <span>Install Desktop App</span>
+              </div>
+              <span className="text-[10px] uppercase tracking-wider opacity-70 font-mono">PWA</span>
+            </button>
+          )}
+
+          {isStandalone && (
+            <div className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-medium flex items-center gap-2">
+              <CheckCircle2 size={13} className="shrink-0" />
+              <span>Standalone App Active</span>
+            </div>
+          )}
+
           <p className="text-[11px] font-mono text-m3-outline">
             {tShell.footerText}
           </p>
@@ -317,18 +464,23 @@ export const Shell = ({
       </nav>
 
       {/* Main Content Area */}
-      <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden pb-24 md:pb-0 flex flex-col relative">
+      <main className="flex-1 min-w-0 overflow-hidden flex flex-col relative">
         <AnimatePresence>
           {!isOnline && (
             <motion.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="md:hidden bg-amber-500/10 dark:bg-amber-500/5 border-b border-amber-500/20 px-4 py-2 text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2 font-medium shrink-0 overflow-hidden select-none"
+              className="bg-amber-500/10 dark:bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-xs text-amber-700 dark:text-amber-400 flex items-center justify-between gap-2 font-medium shrink-0 overflow-hidden select-none z-30"
             >
-              <WifiOff size={14} className="shrink-0 text-amber-500" />
-              <span className="leading-tight">
-                Offline. Edits saved locally, but won't sync immediately.
+              <div className="flex items-center gap-2">
+                <WifiOff size={14} className="shrink-0 text-amber-500" />
+                <span className="leading-tight">
+                  You are offline • Working in 100% Local IndexedDB Mode
+                </span>
+              </div>
+              <span className="text-[10px] font-mono opacity-80 uppercase px-2 py-0.5 rounded bg-amber-500/15">
+                Offline Ready
               </span>
             </motion.div>
           )}
@@ -581,7 +733,7 @@ export const Shell = ({
         )}
       </AnimatePresence>
 
-      {/* Telegram Quick Peek Modal Overlay */}
+      {/* Quick Peek Modal Overlay */}
       <AnimatePresence>
         {activePreviewPost && (
           <TelegramQuickPeek

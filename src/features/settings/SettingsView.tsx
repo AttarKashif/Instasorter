@@ -23,19 +23,28 @@ import {
   Moon,
   Sun,
   MonitorSmartphone,
+  FileSpreadsheet,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import toast from "react-hot-toast";
 import { usePostStore } from "../../store/useStore";
 import { db } from "../../lib/db";
-import { retrySingleThumbnail } from "../../lib/thumbnailWorker";
-import { SAMPLE_POSTS } from "../../data/samplePosts";
+import { triggerVibration } from "../../lib/vibrate";
+import {
+  retrySingleThumbnail,
+  isWorkerActive,
+  registerProgressCallback,
+  unregisterProgressCallback,
+  getThumbnailStats,
+  getThrottleStatus,
+  retryFailedThumbnails,
+} from "../../lib/thumbnailWorker";
 import { normalizeInstagramPost } from "../../lib/parser";
 import { AddBookmarkModal } from "../../components/ui/AddBookmarkModal";
 import { VOCABULARY } from "../../constants/vocabulary";
 import { ProfileTab } from "./components/ProfileTab";
 import { AppearanceTab } from "./components/AppearanceTab";
 import { MaintenanceTab } from "./components/MaintenanceTab";
-import { DiagnosticsTab } from "./components/DiagnosticsTab";
 
 interface SettingsViewProps {
   onNavigate?: (view: "home" | "grouped" | "analytics" | "settings") => void;
@@ -54,36 +63,80 @@ export const SettingsView = React.memo(
     const t = VOCABULARY.settings;
     const posts = usePostStore((state) => state.posts);
     const setPosts = usePostStore((state) => state.setPosts);
+
+    const [workerStats, setWorkerStats] = useState(() =>
+      getThumbnailStats(posts),
+    );
+    const [isDownloading, setIsDownloading] = useState(() => isWorkerActive());
+
+    useEffect(() => {
+      const updateStats = () => {
+        const currentPosts = usePostStore.getState().posts;
+        setWorkerStats(getThumbnailStats(currentPosts));
+        setIsDownloading(isWorkerActive());
+      };
+
+      registerProgressCallback(updateStats);
+      updateStats();
+
+      return () => {
+        unregisterProgressCallback(updateStats);
+      };
+    }, [posts]);
+
+    // Scraper throttle/rate-limiting status
+    const [throttleStatus, setThrottleStatus] = useState({
+      throttled: false,
+      remaining: 0,
+    });
+
+    // Poll throttle/rate limit status from the background worker
+    useEffect(() => {
+      let timer: any;
+      const checkThrottle = () => {
+        setThrottleStatus(getThrottleStatus());
+      };
+      checkThrottle();
+      if (isDownloading) {
+        timer = setInterval(checkThrottle, 1000);
+      }
+      return () => {
+        if (timer) clearInterval(timer);
+      };
+    }, [isDownloading]);
+
     const [showConfirmClear, setShowConfirmClear] = useState(false);
     const [showConfirmClearAll, setShowConfirmClearAll] = useState(false);
-    const [toast, setToast] = useState<{
-      type: "success" | "error";
-      message: string;
-    } | null>(null);
+    const setToast = useCallback((val: { type: "success" | "error"; message: string } | null) => {
+      if (val) {
+        if (val.type === "success") {
+          toast.success(val.message);
+        } else {
+          toast.error(val.message);
+        }
+      }
+    }, []);
 
     // Profile Editable Details
     const [displayName, setDisplayName] = useState(
-      () => localStorage.getItem("instasorter_displayName") || "Kashif Attar",
+      () => localStorage.getItem("instasorter_displayName") || "Curator",
     );
     const [username, setUsername] = useState(
-      () => localStorage.getItem("instasorter_username") || "kashif_archivist",
+      () => localStorage.getItem("instasorter_username") || "",
     );
     const [email, setEmail] = useState(
       () =>
         localStorage.getItem("instasorter_email") ||
-        "attarmohammadkashif@gmail.com",
+        "",
     );
     const [isEditing, setIsEditing] = useState(false);
     const [animationsEnabled, setAnimationsEnabled] = useState(
       () => localStorage.getItem("instasorter_animations") !== "false",
     );
     const [activeTab, setActiveTab] = useState<
-      "profile" | "appearance" | "maintenance" | "diagnostics"
+      "profile" | "appearance" | "maintenance"
     >("profile");
-    const [optSearch, setOptSearch] = useState("");
-    const [optFilter, setOptFilter] = useState<"all" | "broken_thumbnail" | "missing_metadata">("all");
-    const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
-    const [retryingIds, setRetryingIds] = useState<Set<string>>(new Set());
+    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
     const [compactMode, setCompactMode] = useState(
       () => localStorage.getItem("instasorter_compact") === "true",
@@ -184,6 +237,90 @@ export const SettingsView = React.memo(
       downloadAnchorNode.remove();
     };
 
+    const exportCSVData = () => {
+      if (posts.length === 0) {
+        setToast({
+          type: "error",
+          message: "No posts to export as CSV!",
+        });
+        return;
+      }
+
+      const escapeCSV = (val: any): string => {
+        if (val === undefined || val === null) return "";
+        let str = "";
+        if (Array.isArray(val)) {
+          str = val.join(";");
+        } else {
+          str = String(val);
+        }
+        const needsQuotes = str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r");
+        if (needsQuotes) {
+          str = '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+      };
+
+      const headers = [
+        "ID",
+        "Post URL",
+        "Creator Username",
+        "Creator Name",
+        "Caption",
+        "Media Type",
+        "Saved At",
+        "Hashtags",
+        "Tags",
+        "Collections",
+        "Is Favorite",
+        "Is Archived",
+        "Read Later",
+        "Is Reel",
+        "Notes",
+        "Location",
+        "Instagram Likes"
+      ];
+
+      const csvRows = [headers.join(",")];
+
+      posts.forEach((post) => {
+        const row = [
+          escapeCSV(post.id),
+          escapeCSV(post.postUrl),
+          escapeCSV(post.creatorUsername),
+          escapeCSV(post.creatorName),
+          escapeCSV(post.caption),
+          escapeCSV(post.mediaType),
+          escapeCSV(post.savedAt),
+          escapeCSV(post.hashtags),
+          escapeCSV(post.tags),
+          escapeCSV(post.collections),
+          escapeCSV(post.isFavorite),
+          escapeCSV(post.isArchived),
+          escapeCSV(post.readLater),
+          escapeCSV(post.isReel),
+          escapeCSV(post.notes),
+          escapeCSV(post.location),
+          escapeCSV(post.instagramLikes)
+        ];
+        csvRows.push(row.join(","));
+      });
+
+      const csvContent = "\ufeff" + csvRows.join("\r\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const downloadAnchorNode = document.createElement("a");
+      downloadAnchorNode.setAttribute("href", url);
+      downloadAnchorNode.setAttribute(
+        "download",
+        `instasorter_export_${new Date().toISOString().split("T")[0]}.csv`,
+      );
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+      URL.revokeObjectURL(url);
+    };
+
     const allTags = useMemo(() => {
       const tagsSet = new Set<string>();
       posts.forEach((p) => p.tags?.forEach((t) => tagsSet.add(t)));
@@ -197,14 +334,6 @@ export const SettingsView = React.memo(
       );
       return Array.from(collectionsSet);
     }, [posts]);
-
-    // Auto-clear toast after 3 seconds
-    useEffect(() => {
-      if (toast) {
-        const timer = setTimeout(() => setToast(null), 3000);
-        return () => clearTimeout(timer);
-      }
-    }, [toast]);
 
     // Calculate dynamic stats
     const { totalPosts, favoritesCount, archivedCount, activeCount } =
@@ -225,125 +354,6 @@ export const SettingsView = React.memo(
 
     const uniqueTags = allTags.length;
 
-    const filteredDeadPosts = useMemo(() => {
-      return posts.map((post) => {
-        const issues: { id: string; label: string; severity: "high" | "medium" }[] = [];
-        if (post.thumbnailStatus === "failed") {
-          issues.push({ id: "thumb_failed", label: "Extraction Failed", severity: "high" });
-        } else if (!post.thumbnailUrl || post.thumbnailUrl.trim() === "" || post.thumbnailUrl === "base64-placeholder") {
-          issues.push({ id: "thumb_missing", label: "Missing Thumbnail", severity: "high" });
-        }
-        
-        if (!post.creatorUsername || post.creatorUsername.trim() === "" || post.creatorUsername === "instagram_creator" || post.creatorUsername === "instagram_user") {
-          issues.push({ id: "meta_creator", label: "Missing Creator", severity: "medium" });
-        }
-        if (!post.caption || post.caption.trim() === "") {
-          issues.push({ id: "meta_caption", label: "Missing Caption", severity: "medium" });
-        }
-        return { post, issues };
-      }).filter((item) => {
-        if (item.issues.length === 0) return false;
-        
-        // Apply category filter
-        if (optFilter === "broken_thumbnail") {
-          if (!item.issues.some((issue) => issue.id.startsWith("thumb_"))) return false;
-        } else if (optFilter === "missing_metadata") {
-          if (!item.issues.some((issue) => issue.id.startsWith("meta_"))) return false;
-        }
-        
-        // Apply search query
-        if (optSearch.trim()) {
-          const query = optSearch.toLowerCase().trim();
-          const matchId = item.post.id.toLowerCase().includes(query);
-          const matchUser = item.post.creatorUsername.toLowerCase().includes(query);
-          const matchCaption = item.post.caption.toLowerCase().includes(query);
-          if (!matchId && !matchUser && !matchCaption) return false;
-        }
-        
-        return true;
-      });
-    }, [posts, optSearch, optFilter]);
-
-    // Handlers for optimization
-    const handleRetrySingle = async (postId: string, username: string) => {
-      setRetryingIds((prev) => {
-        const next = new Set(prev);
-        next.add(postId);
-        return next;
-      });
-      try {
-        await retrySingleThumbnail(postId);
-        setToast({ type: "success", message: `Re-triggered thumbnail extraction for @${username}` });
-      } catch (err) {
-        console.error("Retry failed", err);
-        setToast({ type: "error", message: "Failed to re-trigger extraction." });
-      } finally {
-        setTimeout(() => {
-          setRetryingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(postId);
-            return next;
-          });
-        }, 1000);
-      }
-    };
-
-    const handleDeleteSingleDead = async (postId: string) => {
-      try {
-        await db.posts.delete(postId);
-        const fresh = await db.posts.toArray();
-        setPosts(fresh);
-        setToast({ type: "success", message: "Successfully deleted dead post entry." });
-      } catch (err) {
-        console.error("Delete failed", err);
-        setToast({ type: "error", message: "Failed to delete post." });
-      }
-    };
-
-    const handleBulkRetryDead = async () => {
-      const postsToRetry = filteredDeadPosts.filter(
-        (item) => item.issues.some((i) => i.id.startsWith("thumb_"))
-      );
-      if (postsToRetry.length === 0) {
-        setToast({ type: "error", message: "No broken thumbnails found in filtered list to retry." });
-        return;
-      }
-      
-      try {
-        for (const { post } of postsToRetry) {
-          const updatedPost = {
-            thumbnailStatus: "pending" as const,
-            thumbnailAttempts: 0,
-          };
-          await db.posts.update(post.id, updatedPost);
-          usePostStore.getState().updatePost(post.id, updatedPost);
-        }
-        setToast({ type: "success", message: `Re-triggering ${postsToRetry.length} thumbnail extractions in background...` });
-        const { runThumbnailWorker } = await import("../../lib/thumbnailWorker");
-        runThumbnailWorker();
-      } catch (err) {
-        console.error("Bulk retry failed", err);
-        setToast({ type: "error", message: "Failed to run bulk thumbnail retry." });
-      }
-    };
-
-    const handleBulkDeleteDead = async () => {
-      if (filteredDeadPosts.length === 0) return;
-      try {
-        const idsToDelete = filteredDeadPosts.map(item => item.post.id);
-        for (const id of idsToDelete) {
-          await db.posts.delete(id);
-        }
-        const fresh = await db.posts.toArray();
-        setPosts(fresh);
-        setShowBulkDeleteConfirm(false);
-        setToast({ type: "success", message: `Successfully deleted ${idsToDelete.length} unoptimized entries.` });
-      } catch (err) {
-        console.error("Bulk delete failed", err);
-        setToast({ type: "error", message: "Failed to run bulk delete." });
-      }
-    };
-
     const handleSaveProfile = useCallback(() => {
       localStorage.setItem("instasorter_displayName", displayName);
       localStorage.setItem("instasorter_username", username);
@@ -357,12 +367,13 @@ export const SettingsView = React.memo(
 
     const handleClearAllPosts = useCallback(async () => {
       try {
-        await db.posts.clear();
+        triggerVibration("warning");
+        await Promise.all([db.posts.clear(), db.collections.clear()]);
         setPosts([]);
         setShowConfirmClear(false);
         setToast({
           type: "success",
-          message: "All post records and thumbnails cleared successfully.",
+          message: "All post records, collections, and thumbnails cleared successfully.",
         });
       } catch (err) {
         console.error(err);
@@ -375,7 +386,8 @@ export const SettingsView = React.memo(
 
     const handleClearAllData = useCallback(async () => {
       try {
-        await db.posts.clear();
+        triggerVibration("warning");
+        await Promise.all([db.posts.clear(), db.collections.clear()]);
         setPosts([]);
         localStorage.clear();
         setShowConfirmClearAll(false);
@@ -392,22 +404,6 @@ export const SettingsView = React.memo(
           type: "error",
           message: "Failed to clear all data. Please try again.",
         });
-      }
-    }, [setPosts]);
-
-    const handleLoadSamples = useCallback(async () => {
-      try {
-        await db.posts.clear();
-        await db.posts.bulkPut(SAMPLE_POSTS.map(normalizeInstagramPost));
-        const fresh = await db.posts.toArray();
-        setPosts(fresh);
-        setToast({
-          type: "success",
-          message: "Successfully loaded sample posts!",
-        });
-      } catch (err) {
-        console.error(err);
-        setToast({ type: "error", message: "Failed to load sample posts." });
       }
     }, [setPosts]);
 
@@ -587,42 +583,18 @@ export const SettingsView = React.memo(
       }
     };
 
-    const TABS = [
-      { id: "profile" as const, label: "Curator Profile", icon: User, desc: "Credentials & metrics" },
-      { id: "appearance" as const, label: "Appearance & Style", icon: MonitorSmartphone, desc: "Theme & visual preferences" },
-      { id: "maintenance" as const, label: "Maintenance & Tools", icon: RefreshCw, desc: "Database & optimization scripts" },
-      { id: "diagnostics" as const, label: "Diagnostic Hub", icon: ShieldAlert, desc: "Find and repair bad links", badge: filteredDeadPosts.length },
+    const TABS: { id: "profile" | "appearance" | "maintenance"; label: string; icon: any; desc: string; badge?: number }[] = [
+      { id: "profile", label: "Curator Profile", icon: User, desc: "Credentials & metrics" },
+      { id: "appearance", label: "Appearance & Style", icon: MonitorSmartphone, desc: "Theme & visual preferences" },
+      { id: "maintenance", label: "Maintenance & Tools", icon: RefreshCw, desc: "Database & optimization scripts" },
     ];
 
     return (
-      <div className="flex-1 bg-m3-surface overflow-y-auto p-4 md:p-6 max-w-7xl mx-auto w-full select-none">
-        {/* Toast Notification */}
-        <AnimatePresence>
-          {toast && (
-            <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-3.5 py-2.5 rounded-xl shadow-lg border text-xs font-semibold ${
-                toast.type === "success"
-                  ? "bg-m3-surface border-m3-outline-variant/30 text-m3-primary dark:bg-zinc-900"
-                  : "bg-red-50 text-red-800 border-red-100 dark:bg-red-950 dark:text-red-300 dark:border-red-900/50"
-              }`}
-            >
-              {toast.type === "success" ? (
-                <Check size={14} className="text-emerald-500" />
-              ) : (
-                <ShieldAlert size={14} className="text-red-500" />
-              )}
-              <span>{toast.message}</span>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
+      <div className="flex-1 bg-m3-surface overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-6 max-w-7xl mx-auto w-full select-none">
         <div className="space-y-6">
-          {/* Header Title Block - Clean & Spacious */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 pb-3 border-b border-m3-outline-variant/15">
-            <div className="flex items-center gap-2.5">
+          {/* Compact Unified Settings Header */}
+          <div className="flex flex-row items-center justify-between gap-3 pb-3 border-b border-m3-outline-variant/15">
+            <div className="flex items-center gap-3 shrink-0">
               {onNavigate && (
                 <button
                   onClick={() => onNavigate("home")}
@@ -632,79 +604,78 @@ export const SettingsView = React.memo(
                   <ArrowLeft size={16} />
                 </button>
               )}
-              <div className="space-y-0.5">
-                <h2 className="text-base font-bold font-display tracking-tight text-m3-on-surface">
+              <div>
+                <h1 className="text-sm md:text-base font-bold font-display text-m3-on-surface tracking-tight">
                   {t.title}
-                </h2>
+                </h1>
+                <p className="text-[10px] text-m3-on-surface-variant font-medium">
+                  {t.subtitle}
+                </p>
               </div>
-            </div>
-            
-            <div className="flex overflow-x-auto md:flex-wrap items-center gap-2 max-w-full pb-2.5 md:pb-0 scrollbar-none -mx-4 px-4 md:mx-0 md:px-0">
-              <button
-                onClick={() => setIsAddModalOpen(true)}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-m3-primary hover:bg-m3-primary/5 rounded-full border border-m3-outline-variant transition-all cursor-pointer bg-m3-surface hover:border-m3-primary/30 shrink-0 shadow-2xs active:scale-95"
-              >
-                <Plus size={12} className="stroke-[2.5]" />
-                <span>Add Bookmark</span>
-              </button>
-
-              {onNavigate && (
-                <button
-                  onClick={() =>
-                    usePostStore.getState().setIsImportModalOpen(true)
-                  }
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-m3-on-surface-variant hover:bg-m3-surface-variant/20 rounded-full border border-m3-outline-variant transition-all cursor-pointer bg-m3-surface shrink-0 active:scale-95"
-                >
-                  <Upload size={12} />
-                  <span>Import More</span>
-                </button>
-              )}
-
-              <button
-                onClick={exportData}
-                className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold bg-m3-primary text-m3-on-primary hover:shadow-md hover:bg-opacity-95 rounded-full transition-all cursor-pointer shadow-xs shrink-0 active:scale-95"
-              >
-                <Layers size={12} />
-                <span>Export JSON</span>
-              </button>
-
-              <button
-                onClick={() => setShowConfirmClear(true)}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-red-600 dark:text-red-400 bg-red-500/5 hover:bg-red-600 hover:text-white dark:bg-red-500/10 dark:hover:bg-red-600 dark:hover:text-white rounded-full border border-red-500/20 dark:border-red-500/30 hover:border-red-600 transition-all cursor-pointer active:scale-95 shadow-2xs shrink-0"
-              >
-                <Trash2 size={12} />
-                <span>Clear All Posts</span>
-              </button>
             </div>
           </div>
 
-          {/* Subnavigation Segment Row (Mobile tabs scroll horizontally) */}
-          <div className="md:hidden flex items-center gap-2 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-none select-none">
-            {TABS.map((tab) => {
-              const Icon = tab.icon;
-              const isActive = activeTab === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-full text-xs font-bold transition-all cursor-pointer border shrink-0 ${
-                    isActive
-                      ? "bg-m3-primary text-m3-on-primary border-m3-primary shadow-sm"
-                      : "bg-m3-surface border-m3-outline-variant/60 text-m3-on-surface-variant hover:text-m3-on-surface"
-                  }`}
+          {/* Subnavigation Segment Row (Mobile tabs Custom Dropdown) */}
+          <div className="md:hidden relative select-none z-30 mb-2">
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="w-full flex items-center justify-between p-3.5 bg-m3-surface border border-m3-outline-variant/60 rounded-[16px] text-m3-on-surface shadow-2xs transition-all active:scale-[0.99] cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
+                  {React.createElement(TABS.find((t) => t.id === activeTab)?.icon || User, { size: 16 })}
+                </div>
+                <div className="text-left">
+                  <div className="text-xs font-bold font-display">{TABS.find((t) => t.id === activeTab)?.label}</div>
+                  <div className="text-[10px] text-m3-on-surface-variant font-semibold mt-0.5">{TABS.find((t) => t.id === activeTab)?.desc}</div>
+                </div>
+              </div>
+              <ChevronRight size={16} className={`text-m3-outline transition-transform duration-200 ${isMobileMenuOpen ? 'rotate-90' : ''}`} />
+            </button>
+
+            <AnimatePresence>
+              {isMobileMenuOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="absolute left-0 right-0 mt-2 bg-m3-surface border border-m3-outline-variant/60 rounded-[16px] shadow-lg z-40 p-1.5 flex flex-col gap-1"
                 >
-                  <Icon size={14} />
-                  <span>{tab.label}</span>
-                  {tab.badge !== undefined && tab.badge > 0 && (
-                    <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full leading-none ${
-                      isActive ? "bg-m3-on-primary text-m3-primary" : "bg-red-500 text-white animate-pulse"
-                    }`}>
-                      {tab.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+                  {TABS.map((tab) => {
+                    const Icon = tab.icon;
+                    const isActive = activeTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => {
+                          setActiveTab(tab.id);
+                          setIsMobileMenuOpen(false);
+                        }}
+                        className={`w-full text-left p-3 rounded-xl border transition-all duration-200 cursor-pointer flex items-center gap-3 ${
+                          isActive
+                            ? "bg-m3-primary/5 border-m3-primary/30 text-m3-primary shadow-2xs font-bold"
+                            : "bg-transparent border-transparent text-m3-on-surface-variant hover:bg-m3-surface-variant/20 hover:text-m3-on-surface"
+                        }`}
+                      >
+                        <div className={`p-1.5 rounded-lg transition-all ${
+                          isActive ? "bg-m3-primary text-m3-on-primary" : "bg-m3-surface-variant text-m3-outline"
+                        }`}>
+                          <Icon size={14} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold font-display">{tab.label}</div>
+                        </div>
+                        {tab.badge !== undefined && tab.badge > 0 && (
+                          <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-mono font-bold leading-none">
+                            {tab.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Grid Layout Container */}
@@ -795,35 +766,15 @@ export const SettingsView = React.memo(
                   {activeTab === "maintenance" && (
                     <MaintenanceTab
                       handleConsolidateTags={handleConsolidateTags}
-                      retryFailedThumbnails={handleBulkRetryDead}
+                      retryFailedThumbnails={retryFailedThumbnails}
                       setToast={setToast}
                       handleAnalyzeDuplicates={handleAnalyzeDuplicates}
-                      handleLoadSamples={handleLoadSamples}
                       setShowConfirmClear={setShowConfirmClear}
                       setShowConfirmClearAll={setShowConfirmClearAll}
-                    />
-                  )}
-
-                  {activeTab === "diagnostics" && (
-                    <DiagnosticsTab
-                      filteredDeadPosts={filteredDeadPosts}
-                      optSearch={optSearch}
-                      setOptSearch={setOptSearch}
-                      optFilter={optFilter}
-                      setOptFilter={setOptFilter}
-                      handleBulkRetryDead={handleBulkRetryDead}
-                      showBulkDeleteConfirm={showBulkDeleteConfirm}
-                      setShowBulkDeleteConfirm={setShowBulkDeleteConfirm}
-                      handleBulkDeleteDead={handleBulkDeleteDead}
-                      retryingIds={retryingIds}
-                      handleRetrySingle={handleRetrySingle}
-                      handleDeleteSingleDead={handleDeleteSingleDead}
-                      theme={theme}
-                      displayName={displayName}
-                      username={username}
-                      email={email}
-                      animationsEnabled={animationsEnabled}
-                      compactMode={compactMode}
+                      exportCSVData={exportCSVData}
+                      workerStats={workerStats}
+                      isDownloading={isDownloading}
+                      throttleStatus={throttleStatus}
                     />
                   )}
 
@@ -902,9 +853,9 @@ export const SettingsView = React.memo(
                   </button>
                   <button
                     onClick={handleClearAllPosts}
-                    className="px-4 py-2 text-xs font-semibold rounded-full bg-red-600 text-white hover:bg-red-700 cursor-pointer transition-colors shadow-sm text-center font-sans active:scale-95"
+                    className="px-4 py-2 text-xs font-semibold rounded-full bg-red-600 text-white hover:bg-red-700 transition-all shadow-sm text-center font-sans cursor-pointer active:scale-95"
                   >
-                    Skip Backup & Clear All Posts
+                    Clear All Posts
                   </button>
                 </div>
               </motion.div>
@@ -976,7 +927,7 @@ export const SettingsView = React.memo(
                   </button>
                   <button
                     onClick={handleClearAllData}
-                    className="px-4 py-2 text-xs font-semibold rounded-full bg-red-600 hover:bg-red-700 text-white cursor-pointer transition-colors shadow-sm text-center font-sans active:scale-95"
+                    className="px-4 py-2 text-xs font-semibold rounded-full bg-red-600 text-white hover:bg-red-700 transition-all shadow-sm text-center font-sans cursor-pointer active:scale-95"
                   >
                     Wipe Everything &amp; Reload
                   </button>

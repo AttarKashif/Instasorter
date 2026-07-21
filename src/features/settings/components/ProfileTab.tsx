@@ -45,9 +45,9 @@ export const ProfileTab: React.FC<ProfileTabProps> = React.memo(({
           <div className="w-20 h-20 rounded-full bg-m3-primary/5 border border-m3-outline-variant/30 text-m3-primary flex items-center justify-center font-display font-bold text-2xl shadow-xs shrink-0 relative overflow-hidden">
             <div className="absolute inset-0 bg-m3-primary-container/20" />
             <span className="relative z-10">
-              {displayName
+              {(displayName || "Curator")
                 .split(" ")
-                .map((n) => n[0])
+                .map((n) => n ? n[0] : "")
                 .join("")
                 .toUpperCase()
                 .substring(0, 2)}
@@ -97,14 +97,18 @@ export const ProfileTab: React.FC<ProfileTabProps> = React.memo(({
             ) : (
               <div className="space-y-1">
                 <h3 className="text-xl font-bold font-display text-m3-on-surface">
-                  {displayName}
+                  {displayName || "Curator"}
                 </h3>
-                <p className="text-sm font-semibold text-m3-primary">
-                  @{username}
-                </p>
-                <p className="text-xs text-m3-on-surface-variant font-medium mt-1">
-                  {email}
-                </p>
+                {username && (
+                  <p className="text-sm font-semibold text-m3-primary">
+                    @{username}
+                  </p>
+                )}
+                {email && (
+                  <p className="text-xs text-m3-on-surface-variant font-medium mt-1">
+                    {email}
+                  </p>
+                )}
               </div>
             )}
 
@@ -112,7 +116,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = React.memo(({
               {isEditing ? (
                 <button
                   onClick={handleSaveProfile}
-                  className="flex items-center gap-1.5 bg-m3-primary text-white rounded-xl px-5 py-2 text-xs font-bold cursor-pointer hover:bg-m3-primary/95 transition-all shadow-xs active:scale-95"
+                  className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl px-5 py-2 text-xs font-bold cursor-pointer hover:bg-m3-primary/95 transition-all shadow-xs active:scale-95"
                 >
                   <Save size={12} />
                   <span>Save Changes</span>

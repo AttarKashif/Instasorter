@@ -51,21 +51,29 @@ export function getThrottleStatus() {
   return { throttled: false, remaining: 0 };
 }
 
-// Global callback for UI updates
-let globalProgressCallback: (() => void) | null = null;
+// Global callbacks for UI updates
+const globalProgressCallbacks = new Set<() => void>();
 
 export function registerProgressCallback(callback: () => void) {
-  globalProgressCallback = callback;
+  globalProgressCallbacks.add(callback);
 }
 
-export function unregisterProgressCallback() {
-  globalProgressCallback = null;
+export function unregisterProgressCallback(callback?: () => void) {
+  if (callback) {
+    globalProgressCallbacks.delete(callback);
+  } else {
+    globalProgressCallbacks.clear();
+  }
 }
 
 function notifyUI() {
-  if (globalProgressCallback) {
-    globalProgressCallback();
-  }
+  globalProgressCallbacks.forEach((cb) => {
+    try {
+      cb();
+    } catch (e) {
+      console.warn("Progress callback failed:", e);
+    }
+  });
 }
 
 export async function purgeOldOrFailedStorage() {
@@ -111,6 +119,12 @@ export async function purgeOldOrFailedStorage() {
         post.thumbnailStatus === "failed" &&
         (post.thumbnailAttempts || 0) >= 5
       ) {
+        if (post.visibility !== "hidden") {
+          const updatedVisibility = { visibility: "hidden" as const };
+          await db.posts.update(post.id, updatedVisibility);
+          usePostStore.getState().updatePost(post.id, updatedVisibility);
+        }
+
         const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
         const lastAttempt = post.lastThumbnailAttempt
           ? new Date(post.lastThumbnailAttempt).getTime()
@@ -342,7 +356,7 @@ async function processQueue(): Promise<boolean> {
     );
   }
 
-  const CONCURRENCY = 4; // Concurrency control
+  const CONCURRENCY = 1; // Concurrency control: reduced to 1 to prevent concurrent requests triggering Instagram 429 rate limiting
   let index = 0;
 
   const count =
@@ -359,6 +373,10 @@ async function processQueue(): Promise<boolean> {
         if (post) {
           try {
             await fetchThumbnailForPost(post);
+            // Stagger requests with a 1.5s - 2.5s delay to avoid triggering Instagram's public rate limits
+            if (index < pendingPosts.length && !stopRequested) {
+              await new Promise((resolve) => setTimeout(resolve, 1500 + Math.random() * 1000));
+            }
           } catch (workerErr) {
             console.error(
               `[Thumbnail Worker Queue] Failed to process post ${post.id}:`,
@@ -487,6 +505,7 @@ async function fetchThumbnailForPost(post: Post) {
         thumbnailStatus: "success",
         thumbnailAttempts: attempts,
         lastThumbnailAttempt: new Date(),
+        visibility: "visible",
       };
 
       if (data.additionalSlides && data.additionalSlides.length > 0) {
@@ -514,6 +533,7 @@ async function fetchThumbnailForPost(post: Post) {
         thumbnailStatus: "failed",
         thumbnailAttempts: attempts,
         lastThumbnailAttempt: new Date(),
+        ...(attempts >= MAX_RETRIES ? { visibility: "hidden" as const } : {})
       };
 
       await db.posts.update(post.id, updatedPost);
@@ -535,6 +555,7 @@ async function fetchThumbnailForPost(post: Post) {
       thumbnailStatus: "failed",
       thumbnailAttempts: attempts,
       lastThumbnailAttempt: new Date(),
+      ...(attempts >= MAX_RETRIES ? { visibility: "hidden" as const } : {})
     };
 
     await db.posts.update(post.id, updatedPost);

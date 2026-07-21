@@ -20,9 +20,12 @@ import { validateThumbnailUrl } from "./lib/validation";
 import { decodeInstagramText } from "./lib/parser";
 import { Toaster } from "react-hot-toast";
 import { SkeletonLoader } from "./components/ui/SkeletonLoader";
-import { PerformanceMonitor } from "./components/ui/PerformanceMonitor";
+import { OnboardingView } from "./components/ui/OnboardingView";
 
 export default function App() {
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    return localStorage.getItem("instasorter_onboarding_completed") !== "true";
+  });
   const [view, setView] = useState<
     "home" | "analytics" | "settings" | "grouped"
   >(() => {
@@ -46,6 +49,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("currentView", view);
   }, [view]);
+
+  useEffect(() => {
+    const hasNavigatedOnce = sessionStorage.getItem("instasorter_navigated_settings");
+    if (!hasNavigatedOnce) {
+      setView("settings");
+      sessionStorage.setItem("instasorter_navigated_settings", "true");
+    }
+  }, []);
 
   useEffect(() => {
     localStorage.setItem("gridDensity", gridDensity);
@@ -100,6 +111,8 @@ export default function App() {
       import("./lib/smartCollections").then(({ generateSmartCollections }) => {
         generateSmartCollections().then(setSmartCollections);
       });
+    } else {
+      setSmartCollections([]);
     }
   }, [posts.length, setSmartCollections]);
 
@@ -203,7 +216,7 @@ export default function App() {
 
       for (const p of allPosts) {
         const cleanUrl = cleanInstagramUrl(p.postUrl || "");
-        let canonicalId = p.id;
+        let canonicalId = String(p.id);
 
         // Standardize IDs: if there is a cleanUrl, that must be the canonical ID
         if (cleanUrl) {
@@ -335,6 +348,52 @@ export default function App() {
     };
   }, []);
 
+  const handleOnboardingComplete = async (data: {
+    displayName: string;
+    username: string;
+    email: string;
+    loadSamples: boolean;
+  }) => {
+    localStorage.setItem("instasorter_displayName", data.displayName);
+    localStorage.setItem("instasorter_username", data.username);
+    localStorage.setItem("instasorter_email", data.email);
+    localStorage.setItem("instasorter_onboarding_completed", "true");
+    
+    if (data.loadSamples) {
+      try {
+        const { SAMPLE_POSTS } = await import("./data/samplePosts");
+        const { normalizeInstagramPost } = await import("./lib/parser");
+        await db.posts.clear();
+        await db.posts.bulkPut(SAMPLE_POSTS.map(normalizeInstagramPost));
+        const fresh = await db.posts.toArray();
+        setPosts(fresh);
+      } catch (err) {
+        console.error("Failed to seed sample posts on onboarding:", err);
+      }
+    }
+    setShowOnboarding(false);
+  };
+
+  if (showOnboarding) {
+    return (
+      <>
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              background: "var(--m3-surface-low)",
+              color: "var(--m3-on-surface)",
+              border: "1px solid var(--m3-outline-variant)",
+              borderRadius: "16px",
+              boxShadow: "var(--shadow-glass-md)",
+            },
+          }}
+        />
+        <OnboardingView onComplete={handleOnboardingComplete} />
+      </>
+    );
+  }
+
   return (
     <Shell
       currentView={view}
@@ -349,7 +408,6 @@ export default function App() {
       }
     >
       <Toaster position="bottom-right" toastOptions={{ style: { background: "var(--m3-surface-low)", color: "var(--m3-on-surface)", border: "1px solid var(--m3-outline-variant)", borderRadius: "16px", boxShadow: "var(--shadow-glass-md)" } }} />
-      <PerformanceMonitor />
       <AnimatePresence mode="wait">
         {isResetting ? (
           <motion.div
@@ -378,7 +436,7 @@ export default function App() {
                   }
                 : { duration: 0 }
             }
-            className="h-full"
+            className="h-full flex flex-col min-h-0"
           >
             {isLoading ? (
               <SkeletonLoader gridDensity={gridDensity} />

@@ -28,6 +28,12 @@ import {
   FolderOpen,
   Archive,
   MapPin,
+  ArrowLeft,
+  Globe,
+  Sparkles,
+  Compass,
+  Search,
+  EyeOff,
 } from "lucide-react";
 import { Post } from "../../types/post";
 import { usePostStore } from "../../store/useStore";
@@ -37,6 +43,7 @@ import { InstagramImage } from "./InstagramImage";
 import { retrySingleThumbnail, registerPostVisibility } from "../../lib/thumbnailWorker";
 import toast from "react-hot-toast";
 import { VOCABULARY } from "../../constants/vocabulary";
+import { highlightTextHelper, getSubtlePaletteColor } from "../../lib/highlight";
 
 interface PostCardProps {
   post: Post;
@@ -49,6 +56,8 @@ interface PostCardProps {
   isKeyboardFocused?: boolean;
   onMouseEnter?: () => void;
   isDetailMode?: boolean;
+  creatorFilter?: string;
+  onClose?: () => void;
 }
 
 export const PostCard = React.memo(
@@ -63,6 +72,8 @@ export const PostCard = React.memo(
     isKeyboardFocused,
     onMouseEnter,
     isDetailMode = false,
+    creatorFilter,
+    onClose,
   }: PostCardProps) => {
     const t = VOCABULARY.postcard;
     const updatePost = usePostStore((state) => state.updatePost);
@@ -70,32 +81,14 @@ export const PostCard = React.memo(
     const toggleFavorite = usePostStore((state) => state.toggleFavorite);
     const searchQuery = usePostStore((state) => state.searchQuery);
 
-    const highlightText = useCallback((text: string, search: string) => {
-      if (!text) return "";
-      const trimmedSearch = search.trim();
-      if (!trimmedSearch) return text;
+    const highlightText = useCallback((text: string, fieldType: "caption" | "creator") => {
+      return highlightTextHelper(text, fieldType, searchQuery, creatorFilter);
+    }, [searchQuery, creatorFilter]);
 
-      const escapedSearch = trimmedSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`(${escapedSearch})`, "gi");
-      const parts = text.split(regex);
-
-      return (
-        <>
-          {parts.map((part, index) =>
-            regex.test(part) ? (
-              <mark
-                key={index}
-                className="bg-amber-100 text-slate-955 dark:bg-amber-900/60 dark:text-amber-50 rounded-[3px] px-0.5 font-bold border border-amber-200/30 shadow-xs"
-              >
-                {part}
-              </mark>
-            ) : (
-              part
-            )
-          )}
-        </>
-      );
-    }, []);
+    const subtleBg = useMemo(() => {
+      if (isSelected || isKeyboardFocused) return undefined;
+      return getSubtlePaletteColor(post.colorPalette, isDetailMode ? "var(--m3-surface)" : "var(--m3-surface-low)");
+    }, [post.colorPalette, isSelected, isKeyboardFocused, isDetailMode]);
 
     // Core visual & editing states
     const [showNotesPanel, setShowNotesPanel] = useState(() => {
@@ -121,11 +114,129 @@ export const PostCard = React.memo(
     // Comment editing states
     const [commentInput, setCommentInput] = useState("");
 
+    // Google Search Grounding & Verification States
+    const [isResearching, setIsResearching] = useState(false);
+    const [researchResult, setResearchResult] = useState<string | null>(null);
+    const [researchSources, setResearchSources] = useState<Array<{ title: string; url: string }>>([]);
+    const [customResearchQuery, setCustomResearchQuery] = useState("");
+    const [researchError, setResearchError] = useState<string | null>(null);
+
+    const handleResearch = useCallback(async (type: "creator" | "hashtags" | "custom") => {
+      setIsResearching(true);
+      setResearchError(null);
+      setResearchResult(null);
+      setResearchSources([]);
+
+      try {
+        const payload: any = {};
+        if (type === "creator") {
+          payload.creatorUsername = post.creatorUsername;
+        } else if (type === "hashtags") {
+          payload.hashtags = post.tags || [];
+        } else {
+          if (!customResearchQuery.trim()) return;
+          payload.query = customResearchQuery;
+        }
+
+        const response = await fetch("/api/research", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || "Failed to fetch research from Google Search.");
+        }
+
+        setResearchResult(data.text);
+        setResearchSources(data.sources || []);
+        if (type === "custom") {
+          setCustomResearchQuery("");
+        }
+      } catch (err: any) {
+        console.error("[Research Error]:", err);
+        setResearchError(err.message || "An unexpected error occurred during search.");
+      } finally {
+        setIsResearching(false);
+      }
+    }, [post.creatorUsername, post.tags, customResearchQuery]);
+
+    // Simple robust markdown formatted lines rendering
+    const renderFormattedResearch = useCallback((text: string) => {
+      if (!text) return null;
+      const lines = text.split("\n");
+      return (
+        <div className="flex flex-col gap-2 text-xs leading-relaxed text-m3-on-surface-variant font-sans">
+          {lines.map((line, index) => {
+            let cleanLine = line.trim();
+            if (!cleanLine) return <div key={index} className="h-1.5" />;
+
+            // Check if line is a heading
+            if (cleanLine.startsWith("###")) {
+              return (
+                <h4 key={index} className="font-display font-bold text-m3-on-surface text-sm mt-3.5 mb-1 flex items-center gap-1.5 border-b border-m3-outline-variant/10 pb-0.5">
+                  <Sparkles size={11} className="text-amber-500 shrink-0" />
+                  {cleanLine.replace(/^###\s*/, "")}
+                </h4>
+              );
+            }
+            if (cleanLine.startsWith("##")) {
+              return (
+                <h3 key={index} className="font-display font-extrabold text-m3-on-surface text-sm mt-4 mb-1 border-b border-m3-outline-variant/20 pb-1 flex items-center gap-1.5">
+                  <Compass size={12} className="text-amber-500 shrink-0" />
+                  {cleanLine.replace(/^##\s*/, "")}
+                </h3>
+              );
+            }
+            if (cleanLine.startsWith("#")) {
+              return (
+                <h2 key={index} className="font-display font-black text-m3-on-surface text-base mt-4 mb-1.5 flex items-center gap-2">
+                  <Globe size={13} className="text-amber-500 shrink-0" />
+                  {cleanLine.replace(/^#\s*/, "")}
+                </h2>
+              );
+            }
+
+            // Check if list item
+            const isBullet = cleanLine.startsWith("*") || cleanLine.startsWith("-") || cleanLine.startsWith("•");
+            if (isBullet) {
+              cleanLine = cleanLine.replace(/^[\*\-•]\s*/, "");
+            }
+
+            // Handle inline bold formatting (**text**)
+            const parts = cleanLine.split(/\*\*([^*]+)\*\*/g);
+            const formattedContent = parts.map((part, pIdx) => {
+              if (pIdx % 2 === 1) {
+                return <strong key={pIdx} className="font-extrabold text-m3-on-surface">{part}</strong>;
+              }
+              return part;
+            });
+
+            if (isBullet) {
+              return (
+                <div key={index} className="flex gap-2 pl-2">
+                  <span className="text-m3-on-surface select-none">•</span>
+                  <div className="flex-1 text-m3-on-surface-variant/90">{formattedContent}</div>
+                </div>
+              );
+            }
+
+            return <p key={index} className="text-m3-on-surface-variant/90">{formattedContent}</p>;
+          })}
+        </div>
+      );
+    }, []);
+
     // Sync state if post changes
     useEffect(() => {
       setActiveSlide(0);
       setNoteText(post.notes || "");
       setSaveStatus("idle");
+      setResearchResult(null);
+      setResearchSources([]);
+      setCustomResearchQuery("");
+      setResearchError(null);
     }, [post.id, post.notes]);
 
     // Viewport Intersection observer for prioritizing thumbnail loading
@@ -412,7 +523,7 @@ export const PostCard = React.memo(
               }}
               className="text-m3-primary hover:underline cursor-pointer font-semibold animate-none"
             >
-              {highlightText(part, searchQuery)}
+              {highlightText(part, "caption")}
             </span>
           );
         }
@@ -429,13 +540,13 @@ export const PostCard = React.memo(
               }}
               className="text-m3-primary hover:underline cursor-pointer font-semibold animate-none"
             >
-              {highlightText(part, searchQuery)}
+              {highlightText(part, "caption")}
             </span>
           );
         }
-        return highlightText(part, searchQuery);
+        return highlightText(part, "caption");
       });
-    }, [post.caption, onTagClick, onCreatorClick, searchQuery, highlightText]);
+    }, [post.caption, onTagClick, onCreatorClick, highlightText]);
 
     // Is caption long?
     const captionIsLong = post.caption && post.caption.length > 120;
@@ -444,7 +555,7 @@ export const PostCard = React.memo(
         formattedCaption
       ) : (
         <>
-          {highlightText(post.caption.slice(0, 110), searchQuery)}...{" "}
+          {highlightText(post.caption.slice(0, 110), "caption")}...{" "}
           <button
             type="button"
             onClick={(e) => {
@@ -473,7 +584,12 @@ export const PostCard = React.memo(
           onTouchMove={endHold}
           whileTap={{ scale: 0.98 }}
           transition={{ type: "spring", stiffness: 400, damping: 25 }}
+          style={subtleBg ? { backgroundColor: subtleBg } : undefined}
           className={`relative rounded-[20px] overflow-hidden cursor-pointer border transition-all duration-300 group/card flex flex-col hover:-translate-y-1 hover:shadow-[0_12px_30px_-4px_rgba(0,0,0,0.08)] hover:z-10 ${
+            post.visibility === "hidden"
+              ? "opacity-50 saturate-[0.35] hover:opacity-85 hover:saturate-100"
+              : ""
+          } ${
             isSelected
               ? "bg-m3-primary-container/10 border-m3-primary shadow-glass-md ring-2 ring-m3-primary/20"
               : isKeyboardFocused
@@ -541,6 +657,17 @@ export const PostCard = React.memo(
               )}
             </div>
 
+            {post.visibility === "hidden" && (
+              <div className="absolute inset-0 bg-red-950/25 backdrop-blur-[1.5px] flex flex-col items-center justify-center text-white/95 gap-1.5 z-10 pointer-events-none">
+                <div className="w-10 h-10 rounded-full bg-red-600/90 text-white flex items-center justify-center shadow-lg border border-red-500">
+                  <EyeOff size={20} className="stroke-[2.5]" />
+                </div>
+                <span className="text-[10px] font-extrabold font-mono uppercase bg-red-600 px-2 py-0.5 rounded-full tracking-wider shadow-sm">
+                  Hidden / Broken
+                </span>
+              </div>
+            )}
+
             {/* Gradient Overlays for media area readability */}
             <div className="absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-black/55 to-transparent pointer-events-none z-10" />
             <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/55 to-transparent pointer-events-none z-10" />
@@ -558,7 +685,7 @@ export const PostCard = React.memo(
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 border shadow-md backdrop-blur-md cursor-pointer ${
                     isSelected
-                      ? "bg-m3-primary border-m3-primary text-white scale-110 opacity-100"
+                      ? "bg-m3-primary border-m3-primary text-m3-on-primary scale-110 opacity-100"
                       : "bg-black/30 border-white/25 text-white hover:border-white hover:scale-105 opacity-0 group-hover/card:opacity-100"
                   }`}
                 >
@@ -570,8 +697,13 @@ export const PostCard = React.memo(
               <div className="flex items-center gap-1">
                 {post.thumbnailStatus === "failed" && (
                   <div
-                    className="w-6 h-6 rounded-full bg-red-500/90 text-white flex items-center justify-center shadow-md border border-red-400"
-                    title="Scrape preview failed"
+                    className="z-30 pointer-events-auto w-6 h-6 rounded-full bg-red-500/90 text-white flex items-center justify-center shadow-md border border-red-400 cursor-pointer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      retrySingleThumbnail(post.id);
+                      toast.success("Retrying download...");
+                    }}
+                    title="Scrape preview failed (Click to retry)"
                   >
                     <AlertTriangle size={11} className="stroke-[2.5]" />
                   </div>
@@ -582,7 +714,10 @@ export const PostCard = React.memo(
                   ) : (
                     <ImageIcon size={8} className="text-m3-primary" />
                   )}
-                  <span>{post.mediaType || "image"}</span>
+                  <span>
+                    {post.mediaType || "image"}
+                    {post.mediaType === "carousel" && ` (${post.mediaCount || slides.length})`}
+                  </span>
                 </span>
               </div>
             </div>
@@ -597,7 +732,7 @@ export const PostCard = React.memo(
                   whileTap={{ scale: 1.4 }}
                   className={`w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
                     post.isFavorite
-                      ? "bg-m3-primary text-white"
+                      ? "bg-m3-primary text-m3-on-primary"
                       : "text-white hover:bg-white/20"
                   }`}
                   title={post.isFavorite ? "Remove from Favorites" : "Add to Favorites"}
@@ -612,7 +747,7 @@ export const PostCard = React.memo(
                   whileTap={{ scale: 1.15 }}
                   className={`w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
                     post.isArchived
-                      ? "bg-m3-primary text-white"
+                      ? "bg-m3-primary text-m3-on-primary"
                       : "text-white hover:bg-white/20"
                   }`}
                   title={post.isArchived ? "Unarchive Post" : "Archive Post"}
@@ -630,7 +765,7 @@ export const PostCard = React.memo(
                   whileTap={{ scale: 1.15 }}
                   className={`w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
                     showTagInput
-                      ? "bg-m3-primary text-white"
+                      ? "bg-m3-primary text-m3-on-primary"
                       : "text-white hover:bg-white/20"
                   }`}
                   title="Add Tag Directly"
@@ -672,7 +807,7 @@ export const PostCard = React.memo(
                 }}
                 className="font-display font-extrabold text-sm text-m3-on-surface hover:underline cursor-pointer tracking-tight"
               >
-                @{highlightText(post.creatorUsername || "creator", searchQuery)}
+                @{highlightText(post.creatorUsername || "creator", "creator")}
               </span>
 
               {post.savedAt && (
@@ -789,6 +924,7 @@ export const PostCard = React.memo(
         onTouchMove={endHold}
         whileTap={isDetailMode ? undefined : { scale: 0.98 }}
         transition={{ type: "spring", stiffness: 400, damping: 25 }}
+        style={subtleBg ? { backgroundColor: subtleBg } : undefined}
         className={`relative rounded-[20px] overflow-hidden border transition-all duration-300 group/card flex flex-col ${
           isDetailMode
             ? "bg-m3-surface border-m3-outline-variant shadow-2xl w-full max-w-[600px]"
@@ -878,13 +1014,27 @@ export const PostCard = React.memo(
                   <div
                     className={`w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 border shadow-md backdrop-blur-md cursor-pointer ${
                       isSelected
-                        ? "bg-m3-primary border-m3-primary text-white scale-110 opacity-100"
+                        ? "bg-m3-primary border-m3-primary text-m3-on-primary scale-110 opacity-100"
                         : "bg-black/30 border-white/25 text-white hover:border-white hover:scale-105 opacity-0 group-hover/card:opacity-100"
                     }`}
                   >
                     {isSelected && <Check size={12} className="stroke-[3]" />}
                   </div>
                 </div>
+              )}
+
+              {isDetailMode && onClose && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClose();
+                  }}
+                  className="z-30 w-8 h-8 rounded-full bg-black/45 hover:bg-black/75 text-white flex items-center justify-center border border-white/20 shadow-md backdrop-blur-md cursor-pointer transition-all duration-200 hover:scale-110 active:scale-95 mb-1"
+                  title="Go Back"
+                >
+                  <ArrowLeft size={16} className="stroke-[2.5]" />
+                </button>
               )}
 
               {/* Date and Location */}
@@ -914,7 +1064,7 @@ export const PostCard = React.memo(
               <div className="flex items-center gap-1.5 animate-none">
                 {post.thumbnailStatus === "failed" && (
                   <div
-                    className="w-6 h-6 rounded-full bg-m3-primary/50/95 text-white flex items-center justify-center shadow-md border border-white/20"
+                    className="w-6 h-6 rounded-full bg-m3-primary text-m3-on-primary flex items-center justify-center shadow-md border border-white/20"
                     title="Scrape preview failed"
                   >
                     <AlertTriangle size={12} className="stroke-[2.5]" />
@@ -923,7 +1073,7 @@ export const PostCard = React.memo(
                 {(post.thumbnailStatus === "pending" ||
                   !post.thumbnailStatus) && (
                   <div
-                    className="w-6 h-6 rounded-full bg-m3-primary/50/95 text-white flex items-center justify-center shadow-md border border-white/20"
+                    className="w-6 h-6 rounded-full bg-m3-primary text-m3-on-primary flex items-center justify-center shadow-md border border-white/20"
                     title="Fetching preview image..."
                   >
                     <Loader2 size={12} className="animate-spin stroke-[2.5]" />
@@ -974,7 +1124,7 @@ export const PostCard = React.memo(
                     }}
                     className={`w-5 h-5 rounded-full flex items-center justify-center border transition-all cursor-pointer backdrop-blur-md ${
                       showColDropdown
-                        ? "bg-m3-primary text-white border-m3-primary"
+                        ? "bg-m3-primary text-m3-on-primary border-m3-primary"
                         : "bg-black/30 text-white/90 border-white/25 hover:bg-white/20 hover:border-white"
                     }`}
                     title={t.addToCollection}
@@ -1045,7 +1195,7 @@ export const PostCard = React.memo(
                           <button
                             type="button"
                             onClick={() => handleAddColSubmit(newColInput)}
-                            className="px-2 py-1 rounded-md bg-m3-primary text-white text-[10px] font-bold shrink-0 hover:bg-opacity-90 active:scale-95 cursor-pointer"
+                            className="px-2 py-1 rounded-md bg-m3-primary text-m3-on-primary text-[10px] font-bold shrink-0 hover:bg-opacity-90 active:scale-95 cursor-pointer"
                           >
                             {t.add}
                           </button>
@@ -1085,7 +1235,7 @@ export const PostCard = React.memo(
                     e.stopPropagation();
                     await retrySingleThumbnail(post.id);
                   }}
-                  className="flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-m3-primary hover:bg-opacity-95 text-white text-[10px] font-bold transition-all hover:scale-105 shadow-sm cursor-pointer"
+                  className="flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-m3-primary hover:bg-opacity-95 text-m3-on-primary text-[10px] font-bold transition-all hover:scale-105 shadow-sm cursor-pointer"
                   title="Retry fetching preview image"
                 >
                   <RefreshCw size={10} />
@@ -1109,7 +1259,7 @@ export const PostCard = React.memo(
                 }}
                 className="font-extrabold text-[13px] hover:underline cursor-pointer mr-2 drop-shadow-lg"
               >
-                {highlightText(post.creatorUsername, searchQuery)}
+                {highlightText(post.creatorUsername, "creator")}
               </span>
               {displayedCaption && (
                 <span className="text-[11.5px] font-medium text-white/95 drop-shadow-lg line-clamp-2 mt-0.5">
@@ -1389,13 +1539,137 @@ export const PostCard = React.memo(
                       <button
                         type="submit"
                         disabled={!commentInput.trim()}
-                        className="w-10 sm:w-8 h-10 sm:h-8 rounded-lg bg-m3-primary text-white flex items-center justify-center hover:bg-opacity-95 disabled:bg-m3-outline-variant/30 disabled:text-m3-outline transition-all shrink-0 cursor-pointer"
+                        className="w-10 sm:w-8 h-10 sm:h-8 rounded-lg bg-m3-primary text-m3-on-primary flex items-center justify-center hover:bg-opacity-95 disabled:bg-m3-outline-variant/30 disabled:text-m3-outline transition-all shrink-0 cursor-pointer"
                         title="Post comment"
                       >
                         <Send size={11} className="stroke-[2.5]" />
                       </button>
                     </form>
                   </div>
+
+                  {/* 3. Google Search Grounding & Curation Research */}
+                  {isDetailMode && (
+                    <div className="flex flex-col gap-2 pt-3 border-t border-m3-outline-variant/10 animate-none">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-m3-on-surface-variant/70 uppercase tracking-wider select-none">
+                        <span className="flex items-center gap-1">
+                          <Globe size={11} className="text-m3-primary" />
+                          AI Research & Verification
+                        </span>
+                        <span className="text-[8px] font-extrabold text-amber-600 bg-amber-500/10 px-1.5 py-0.5 rounded tracking-wide">
+                          GOOGLE SEARCH
+                        </span>
+                      </div>
+
+                      {/* Pre-defined Verification Actions */}
+                      <div className="flex flex-wrap gap-1.5 mt-1">
+                        <button
+                          type="button"
+                          onClick={() => handleResearch("creator")}
+                          disabled={isResearching || !post.creatorUsername}
+                          className="px-2.5 py-1.5 sm:py-1 rounded-md text-[10px] font-bold bg-m3-primary/5 hover:bg-m3-primary text-m3-primary hover:text-m3-on-primary border border-m3-primary/10 transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                          title={`Verify creator @${post.creatorUsername || "username"}`}
+                        >
+                          <Sparkles size={9} />
+                          Verify Creator
+                        </button>
+
+                        {post.tags && post.tags.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleResearch("hashtags")}
+                            disabled={isResearching}
+                            className="px-2.5 py-1.5 sm:py-1 rounded-md text-[10px] font-bold bg-m3-primary/5 hover:bg-m3-primary text-m3-primary hover:text-m3-on-primary border border-m3-primary/10 transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                            title="Research hashtag context & trends"
+                          >
+                            <Compass size={9} />
+                            Research Hashtags
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Custom query search box */}
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleResearch("custom");
+                        }}
+                        className="flex gap-1.5 mt-1"
+                      >
+                        <input
+                          type="text"
+                          placeholder="Ask anything about this post, creator, or trends..."
+                          value={customResearchQuery}
+                          onChange={(e) => setCustomResearchQuery(e.target.value)}
+                          disabled={isResearching}
+                          className="flex-1 px-3 py-2 sm:py-1.5 text-xs border border-m3-outline-variant/20 rounded-lg bg-m3-surface text-m3-on-surface outline-none focus:ring-1 focus:ring-m3-primary/30 focus:border-m3-primary transition-all placeholder-m3-outline/40"
+                        />
+                        <button
+                          type="submit"
+                          disabled={isResearching || !customResearchQuery.trim()}
+                          className="w-10 sm:w-8 h-10 sm:h-8 rounded-lg bg-m3-primary text-m3-on-primary flex items-center justify-center hover:bg-opacity-95 disabled:bg-m3-outline-variant/30 disabled:text-m3-outline transition-all shrink-0 cursor-pointer"
+                          title="Search"
+                        >
+                          {isResearching ? (
+                            <Loader2 size={11} className="animate-spin stroke-[2.5]" />
+                          ) : (
+                            <Search size={11} className="stroke-[2.5]" />
+                          )}
+                        </button>
+                      </form>
+
+                      {/* Loading status */}
+                      {isResearching && (
+                        <div className="flex flex-col items-center justify-center py-4 gap-1.5 border border-dashed border-m3-outline-variant/30 rounded-lg bg-m3-primary/5">
+                          <Loader2 size={18} className="animate-spin text-m3-primary" />
+                          <span className="text-[10px] font-bold text-m3-primary tracking-wide animate-pulse">
+                            Querying Google Search Grounding...
+                          </span>
+                          <span className="text-[8px] text-m3-outline italic">
+                            Analyzing real-time web results for perfect verification.
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Error display */}
+                      {researchError && (
+                        <div className="p-3 border border-red-200/30 rounded-lg bg-red-50/5 text-red-600 text-[11px] leading-relaxed">
+                          <div className="font-extrabold mb-0.5">Verification Error</div>
+                          {researchError}
+                        </div>
+                      )}
+
+                      {/* Grounding response output */}
+                      {researchResult && (
+                        <div className="mt-2 p-3.5 border border-m3-outline-variant/15 rounded-xl bg-m3-primary/[0.02] flex flex-col gap-3">
+                          {renderFormattedResearch(researchResult)}
+
+                          {/* Grounding sources citations list */}
+                          {researchSources.length > 0 && (
+                            <div className="pt-2.5 border-t border-m3-outline-variant/10 flex flex-col gap-1.5 animate-none">
+                              <span className="text-[9px] font-extrabold text-m3-outline uppercase tracking-wider select-none">
+                                Sources Verified:
+                              </span>
+                              <div className="flex flex-wrap gap-1.5">
+                                {researchSources.map((src, sIdx) => (
+                                  <a
+                                    key={sIdx}
+                                    href={src.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="px-2 py-0.5 rounded bg-m3-outline-variant/20 hover:bg-m3-primary hover:text-m3-on-primary text-[9.5px] font-medium text-m3-secondary transition-all flex items-center gap-1 cursor-pointer max-w-[150px] truncate"
+                                    title={src.title}
+                                  >
+                                    <Globe size={8} />
+                                    <span className="truncate">{src.title}</span>
+                                  </a>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </motion.div>
             </div>

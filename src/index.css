@@ -6,24 +6,24 @@
   --m3-primary: #0f172a; /* Slate 900 */
   --m3-on-primary: #ffffff;
   --m3-primary-container: rgba(15, 23, 42, 0.08);
-  --m3-on-primary-container: #020617;
+  --m3-on-primary-container: #0f172a;
   
-  --m3-secondary: #475569;
+  --m3-secondary: #4b5563; /* Slate Grey */
   --m3-on-secondary: #ffffff;
   --m3-secondary-container: #f1f5f9;
-  --m3-on-secondary-container: #0f172a;
+  --m3-on-secondary-container: #1f2937;
   
   --m3-tertiary: #0f766e;
   --m3-on-tertiary: #ffffff;
   --m3-tertiary-container: rgba(15, 118, 110, 0.08);
   --m3-on-tertiary-container: #134e4a;
   
-  --m3-surface: rgba(255, 255, 255, 0.85); /* Slightly more transparent glass */
-  --m3-on-surface: #020617; /* Rich Slate */
+  --m3-surface: rgba(255, 255, 255, 0.9); /* Pure White Glass as specified in AGENTS.md */
+  --m3-on-surface: #0f172a; /* Rich Slate */
   --m3-surface-variant: #f8fafc;
-  --m3-on-surface-variant: #475569;
-  --m3-outline: #cbd5e1;
-  --m3-outline-variant: rgba(226, 232, 240, 0.6); /* Softer borders */
+  --m3-on-surface-variant: #4b5563;
+  --m3-outline: #cbd5e1; /* Slate 300 for clean, subtle boundaries */
+  --m3-outline-variant: #e2e8f0; /* Slate 200 for extremely soft, receded borders */
   
   --m3-surface-lowest: #ffffff;
   --m3-surface-low: #ffffff;
@@ -37,33 +37,33 @@
 
 .dark {
   /* Dark Room - Dark Theme - Ultra Premium */
-  --m3-primary: #f1f5f9; /* Slate 100 */
-  --m3-on-primary: #020617;
+  --m3-primary: #f8fafc; /* Slate 50 */
+  --m3-on-primary: #09090b;
   --m3-primary-container: rgba(241, 245, 249, 0.12);
   --m3-on-primary-container: #ffffff;
   
   --m3-secondary: #94a3b8;
-  --m3-on-secondary: #020617;
+  --m3-on-secondary: #0f172a;
   --m3-secondary-container: #1e293b;
   --m3-on-secondary-container: #f8fafc;
   
   --m3-tertiary: #2dd4bf;
-  --m3-on-tertiary: #020617;
+  --m3-on-tertiary: #0f172a;
   --m3-tertiary-container: rgba(45, 212, 191, 0.12);
   --m3-on-tertiary-container: #ccfbf1;
   
-  --m3-surface: rgba(2, 6, 23, 0.85); /* Deepest slate glass */
-  --m3-on-surface: #f8fafc;
-  --m3-surface-variant: #0f172a;
-  --m3-on-surface-variant: #94a3b8;
-  --m3-outline: #475569;
-  --m3-outline-variant: rgba(51, 65, 85, 0.5); /* Softer borders */
+  --m3-surface: rgba(9, 9, 11, 0.8); /* Deep Zinc as specified in AGENTS.md */
+  --m3-on-surface: #fafafa; /* Off-White */
+  --m3-surface-variant: #18181b;
+  --m3-on-surface-variant: #a1a1aa;
+  --m3-outline: #3f3f46; /* Zinc 700 for subtle dark-mode lines */
+  --m3-outline-variant: #27272a; /* Zinc 800 for extremely soft, receded dark borders */
   
-  --m3-surface-lowest: #020617;
-  --m3-surface-low: #020617;
-  --m3-surface-container: #0f172a;
-  --m3-surface-high: #1e293b;
-  --m3-surface-highest: #334155;
+  --m3-surface-lowest: #09090b;
+  --m3-surface-low: #09090b;
+  --m3-surface-container: #18181b;
+  --m3-surface-high: #27272a;
+  --m3-surface-highest: #3f3f46;
 }
 
 @theme {
@@ -114,6 +114,7 @@
 html {
   scroll-behavior: smooth;
   background-color: #f1f5f9; /* Slate 100 for better contrast against white cards */
+  overscroll-behavior-y: contain;
 }
 
 html.dark {
@@ -125,6 +126,7 @@ body {
   color: var(--m3-on-surface);
   font-family: var(--font-sans);
   transition: background-color 0.4s cubic-bezier(0.4, 0, 0.2, 1), color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  overscroll-behavior-y: contain;
 }
 
 /* Glassmorphism base for all surface layers */
@@ -139,41 +141,103 @@ body[class*="bg-m3-surface"], html[class*="bg-m3-surface"] {
   -webkit-backdrop-filter: none;
 }
 
-/* Form Elements Refinement */
-input[type="text"], input[type="email"], textarea {
-  box-shadow: inset 0 2px 6px rgba(0,0,0,0.02);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+/* Form Elements Refinement & Precise, Subtle Outlines */
+input[type="text"], input[type="email"], textarea, select {
+  border: 1px solid var(--m3-outline-variant);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.01);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  background-color: var(--m3-surface);
+  color: var(--m3-on-surface);
 }
-input[type="text"]:focus, input[type="email"]:focus, textarea:focus {
-  box-shadow: 0 0 0 4px var(--m3-primary-container), inset 0 2px 6px rgba(0,0,0,0.01);
+input[type="text"]:focus, input[type="email"]:focus, textarea:focus, select:focus {
+  border-color: var(--m3-outline);
+  box-shadow: 0 0 0 3px rgba(15, 23, 42, 0.04), inset 0 1px 2px rgba(0,0,0,0.01);
+  outline: none;
+}
+.dark input[type="text"]:focus, .dark input[type="email"]:focus, .dark textarea:focus, .dark select:focus {
+  border-color: var(--m3-outline);
+  box-shadow: 0 0 0 3px rgba(248, 250, 252, 0.04), inset 0 1px 2px rgba(0,0,0,0.01);
 }
 
 button {
   transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1); /* Bouncy spring transition */
 }
 button:active:not(:disabled) {
-  transform: scale(0.95);
+  transform: scale(0.96);
+}
+
+/* Elegant, subtle identification of outline buttons and interactive panels */
+button.border, button.border-2, .btn-outline {
+  border-color: var(--m3-outline-variant) !important;
+  transition: all 0.2s ease;
+}
+button.border:hover, button.border-2:hover, .btn-outline:hover {
+  border-color: var(--m3-outline) !important;
+  background-color: rgba(15, 23, 42, 0.02);
+}
+.dark button.border:hover, .dark button.border-2:hover, .dark .btn-outline:hover {
+  background-color: rgba(248, 250, 252, 0.02);
+}
+
+/* Accessibility Focus States */
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--m3-outline) !important;
+  outline-offset: 2px !important;
 }
 
 /* Enable smooth scrolling on all overflow containers */
 .overflow-y-auto, .overflow-auto {
   scroll-behavior: smooth;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch; /* momentum scrolling */
 }
 
 /* Scrollbar customizations */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--m3-outline-variant);
+  background: transparent;
+  border: 2.5px solid transparent;
+  background-clip: padding-box;
   border-radius: 9999px;
 }
-::-webkit-scrollbar-thumb:hover {
+
+/* Ensure that on hover of scrollable elements or container sections, the scrollbar thumb fades in beautifully */
+.overflow-y-auto:hover::-webkit-scrollbar-thumb,
+.overflow-x-auto:hover::-webkit-scrollbar-thumb,
+.overflow-auto:hover::-webkit-scrollbar-thumb,
+main:hover::-webkit-scrollbar-thumb,
+div:hover::-webkit-scrollbar-thumb,
+textarea:hover::-webkit-scrollbar-thumb,
+ul:hover::-webkit-scrollbar-thumb {
   background: var(--m3-outline);
+  background-clip: padding-box;
+}
+
+/* Hovering directly over the scrollbar thumb makes it darker/accent color */
+::-webkit-scrollbar-thumb:hover {
+  background: var(--m3-secondary) !important;
+  background-clip: padding-box !important;
+}
+
+/* Firefox support for auto-hiding subtle scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.overflow-y-auto:hover,
+.overflow-x-auto:hover,
+.overflow-auto:hover,
+main:hover,
+div:hover,
+textarea:hover,
+ul:hover {
+  scrollbar-color: var(--m3-outline) transparent;
 }
 
 /* Shimmer loading keyframes */
@@ -187,9 +251,40 @@ button:active:not(:disabled) {
 
 /* Scrollbar utility classes */
 .scrollbar-none::-webkit-scrollbar {
-  display: none;
+  display: none !important;
 }
 .scrollbar-none {
-  -ms-overflow-style: none;  /* IE and Edge */
-  scrollbar-width: none;  /* Firefox */
+  -ms-overflow-style: none !important;  /* IE and Edge */
+  scrollbar-width: none !important;  /* Firefox */
 }
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  border: 1.5px solid transparent !important;
+}
+
+/* Standalone PWA Safe Areas for iOS & Android Notch / Home Bar Support */
+@supports (padding-top: env(safe-area-inset-top)) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+/* Disable pull-to-refresh on standalone touch devices for native feel */
+@media all and (display-mode: standalone) {
+  body {
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  input, textarea {
+    user-select: text;
+  }
+}
+

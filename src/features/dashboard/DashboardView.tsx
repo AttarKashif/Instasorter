@@ -11,10 +11,12 @@ import React, {
 import toast from "react-hot-toast";
 import { Post } from "../../types/post";
 import { db } from "../../lib/db";
+import { triggerVibration } from "../../lib/vibrate";
 import { usePostStore } from "../../store/useStore";
 import { PostCard } from "../../components/ui/PostCard";
 import { PostCardSkeleton } from "../../components/ui/PostCardSkeleton";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { EmptyLibraryIllustration, EmptyFilterIllustration } from "../../components/ui/EmptyStateIllustrations";
 import { TelegramQuickPeek } from "../../components/ui/TelegramQuickPeek";
 import { InstagramImage } from "../../components/ui/InstagramImage";
 import { AddBookmarkModal } from "../../components/ui/AddBookmarkModal";
@@ -22,13 +24,7 @@ import { SmartRulesManager } from "../../components/ui/SmartRulesManager";
 import { SAMPLE_POSTS } from "../../data/samplePosts";
 import { normalizeInstagramPost } from "../../lib/parser";
 import {
-  getThumbnailStats,
   runThumbnailWorker,
-  retryFailedThumbnails,
-  registerProgressCallback,
-  unregisterProgressCallback,
-  isWorkerActive,
-  getThrottleStatus,
 } from "../../lib/thumbnailWorker";
 import {
   Search,
@@ -51,6 +47,7 @@ import {
   FolderMinus,
   FolderPlus,
   Compass,
+  Eye,
   EyeOff,
   Sparkles,
   Layers,
@@ -69,47 +66,16 @@ import {
   Inbox,
   SlidersHorizontal,
   Film,
+  History,
+  MapPin,
+  Download,
 } from "lucide-react";
 import Fuse from "fuse.js";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, LayoutGroup } from "motion/react";
 import { Virtuoso } from "react-virtuoso";
 import { VOCABULARY } from "../../constants/vocabulary";
+import { parseSearchQuery, highlightTextHelper } from "../../lib/highlight";
 // import { DashboardAnalytics } from './DashboardAnalytics';
-
-const parseSearchQuery = (query: string) => {
-  const normalized = query.trim();
-  if (!normalized) return { isPrefix: false, prefixes: [], generalText: "" };
-
-  // Check if there is any colon indicating a prefix search
-  if (!normalized.includes(":")) {
-    return { isPrefix: false, prefixes: [], generalText: normalized };
-  }
-
-  // Regex to extract prefix:value pairs. Supports quoted strings like creator:"john doe"
-  const regex =
-    /(?:(post|caption|creator|user|author|tag|hashtag|collection|folder):\s*)(?:"([^"]+)"|([^\s]+))/gi;
-
-  const matches: Array<{ prefix: string; value: string }> = [];
-  let match;
-  let remainingText = normalized;
-
-  while ((match = regex.exec(normalized)) !== null) {
-    const prefix = match[1].toLowerCase();
-    const value = match[2] || match[3];
-    matches.push({ prefix, value });
-
-    // Remove the matched part from remaining text
-    remainingText = remainingText.replace(match[0], "");
-  }
-
-  remainingText = remainingText.replace(/\s+/g, " ").trim();
-
-  return {
-    isPrefix: matches.length > 0,
-    prefixes: matches,
-    generalText: remainingText,
-  };
-};
 
 interface DashboardViewProps {
   posts: Post[];
@@ -139,6 +105,8 @@ interface MemoizedPostCardProps {
   onMouseEnter?: () => void;
   onClick?: () => void;
   isDetailMode?: boolean;
+  creatorFilter?: string;
+  onClose?: () => void;
 }
 
 const MemoizedPostCard = React.memo(
@@ -185,57 +153,70 @@ export const DashboardView = React.memo(
     const searchQuery = usePostStore((state) => state.searchQuery);
     const setSearchQuery = usePostStore((state) => state.setSearchQuery);
 
-    const highlightText = useCallback((text: string, search: string) => {
-      if (!text) return "";
-      const trimmedSearch = search.trim();
-      if (!trimmedSearch) return text;
-
-      const escapedSearch = trimmedSearch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const regex = new RegExp(`(${escapedSearch})`, "gi");
-      const parts = text.split(regex);
-
-      return (
-        <>
-          {parts.map((part, index) =>
-            regex.test(part) ? (
-              <mark
-                key={index}
-                className="bg-amber-100 text-slate-955 dark:bg-amber-900/60 dark:text-amber-50 rounded-[3px] px-0.5 font-bold border border-amber-200/30 shadow-xs"
-              >
-                {part}
-              </mark>
-            ) : (
-              part
-            )
-          )}
-        </>
-      );
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
+    const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+      containerRef.current = node;
+      setScrollElement(node);
     }, []);
 
-    // Masonry column count based on density and viewport width
+    const highlightText = useCallback(
+      (text: string, fieldType: "caption" | "creator") => {
+        return highlightTextHelper(text, fieldType, searchQuery, creatorFilter);
+      },
+      [searchQuery, creatorFilter]
+    );
+
+    // Masonry column count based on density and viewport container width
     const [masonryColumns, setMasonryColumns] = useState(2);
+    const resizeTimeoutRef = useRef<any>(null);
 
     useEffect(() => {
-      if (gridDensity === "list") return;
+      if (!scrollElement || gridDensity === "list") return;
 
-      const updateColumns = () => {
-        const width = window.innerWidth;
+      const updateColumns = (width: number) => {
+        let cols = 2;
         if (gridDensity === "single") {
-          if (width < 640) setMasonryColumns(1);
-          else if (width < 1024) setMasonryColumns(2);
-          else setMasonryColumns(2);
-        } else {
-          if (width < 640) setMasonryColumns(2);
-          else if (width < 768) setMasonryColumns(3);
-          else if (width < 1024) setMasonryColumns(4);
-          else setMasonryColumns(5);
+          // Target width for single-feed layout is around 480px per card
+          cols = Math.max(1, Math.floor(width / 480));
+          // Cap it at a maximum of 3 columns for single mode to keep the Instagram-feed feel
+          if (cols > 3) cols = 3;
+        } else if (gridDensity === "double") {
+          // Target width for masonry-grid layout is around 280px per card
+          cols = Math.max(2, Math.floor(width / 280));
+          // Cap it at a maximum of 8 columns to keep it clean and dense even on ultra-ultra-wide monitors
+          if (cols > 8) cols = 8;
         }
+        setMasonryColumns(cols);
       };
 
-      updateColumns();
-      window.addEventListener("resize", updateColumns);
-      return () => window.removeEventListener("resize", updateColumns);
-    }, [gridDensity]);
+      const resizeObserver = new ResizeObserver((entries) => {
+        if (!entries || entries.length === 0) return;
+        const width = entries[0].contentRect.width;
+        
+        if (resizeTimeoutRef.current) {
+          clearTimeout(resizeTimeoutRef.current);
+        }
+
+        // Debounce by 80ms for buttery-smooth transitions and zero layout thrashing on rapid resizing
+        resizeTimeoutRef.current = setTimeout(() => {
+          updateColumns(width);
+        }, 80);
+      });
+
+      resizeObserver.observe(scrollElement);
+
+      // Trigger initial calculation based on the current bounding box immediately
+      const initialWidth = scrollElement.getBoundingClientRect().width;
+      updateColumns(initialWidth);
+
+      return () => {
+        if (resizeTimeoutRef.current) {
+          clearTimeout(resizeTimeoutRef.current);
+        }
+        resizeObserver.disconnect();
+      };
+    }, [scrollElement, gridDensity]);
 
     const [isSidebarOpen, setIsSidebarOpen] = useState(() => {
       try {
@@ -253,13 +234,86 @@ export const DashboardView = React.memo(
     useEffect(() => {
       setLocalSearchQuery(searchQuery);
     }, [searchQuery]);
-    const debouncedSearchQuery = useDebounce(localSearchQuery, 300);
+    
+    // Propagate search query changes instantly for real-time filtering & highlighting as the user types
     useEffect(() => {
-      if (debouncedSearchQuery !== searchQuery) {
-        setSearchQuery(debouncedSearchQuery);
+      if (localSearchQuery !== searchQuery) {
+        setSearchQuery(localSearchQuery);
       }
-    }, [debouncedSearchQuery, searchQuery, setSearchQuery]);
-    const deferredSearchQuery = debouncedSearchQuery; // keeping variable name for compatibility
+    }, [localSearchQuery, searchQuery, setSearchQuery]);
+    const deferredSearchQuery = localSearchQuery; // Updated to localSearchQuery for instant real-time filtering
+
+    const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+      try {
+        const saved = localStorage.getItem("instasorter_recent_searches");
+        return saved ? JSON.parse(saved) : [];
+      } catch {
+        return [];
+      }
+    });
+    const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
+
+    const saveSearchQuery = useCallback((query: string) => {
+      const trimmed = query.trim();
+      if (!trimmed) return;
+      setRecentSearches((prev) => {
+        const filtered = prev.filter((item) => item !== trimmed);
+        const updated = [trimmed, ...filtered].slice(0, 5);
+        localStorage.setItem("instasorter_recent_searches", JSON.stringify(updated));
+        return updated;
+      });
+    }, []);
+
+    const handleDeleteRecentSearch = useCallback((e: React.MouseEvent, termToDelete: string) => {
+      e.stopPropagation();
+      setRecentSearches((prev) => {
+        const updated = prev.filter((item) => item !== termToDelete);
+        localStorage.setItem("instasorter_recent_searches", JSON.stringify(updated));
+        return updated;
+      });
+    }, []);
+
+    const handleShortcutClick = useCallback((shortcut: string, isFullQuery: boolean) => {
+      let newQuery = shortcut;
+      if (!isFullQuery) {
+        if (localSearchQuery.trim()) {
+          newQuery = `${localSearchQuery.trim()} ${shortcut}`;
+        }
+      }
+      setLocalSearchQuery(newQuery);
+      setSearchQuery(newQuery);
+      setTimeout(() => {
+        const inputEl = document.getElementById("curator-search-input");
+        if (inputEl) {
+          (inputEl as HTMLInputElement).focus();
+        }
+      }, 50);
+    }, [localSearchQuery, setSearchQuery]);
+
+    const handleClearAllRecentSearches = useCallback((e: React.MouseEvent) => {
+      e.stopPropagation();
+      setRecentSearches([]);
+      localStorage.setItem("instasorter_recent_searches", JSON.stringify([]));
+    }, []);
+
+    const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
+    const exportDropdownRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+      const handleOutsideClick = (event: MouseEvent) => {
+        if (
+          isExportDropdownOpen &&
+          exportDropdownRef.current &&
+          !exportDropdownRef.current.contains(event.target as Node)
+        ) {
+          setIsExportDropdownOpen(false);
+        }
+      };
+      document.addEventListener("mousedown", handleOutsideClick);
+      return () => {
+        document.removeEventListener("mousedown", handleOutsideClick);
+      };
+    }, [isExportDropdownOpen]);
 
     const [tagSearchQuery, setTagSearchQuery] = useState("");
     const deferredTagSearchQuery = useDebounce(tagSearchQuery, 300);
@@ -295,7 +349,7 @@ export const DashboardView = React.memo(
     );
     const [sortBy, setSortBy] = useState<string>(initialSortBy);
     const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
-    const [hideBrokenLinks, setHideBrokenLinks] = useState(true);
+    const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("visible");
 
     useEffect(() => {
       setFilterFavoriteOnly(initialFilterFavoriteOnly);
@@ -333,6 +387,10 @@ export const DashboardView = React.memo(
       return posts.filter((p) => p.thumbnailStatus === "failed").length;
     }, [posts]);
 
+    const hiddenCount = useMemo(() => {
+      return posts.filter((p) => p.visibility === "hidden").length;
+    }, [posts]);
+
     const selectedPostIds = usePostStore((state) => state.selectedPostIds);
     const toggleSelectPost = usePostStore((state) => state.toggleSelectPost);
     const bulkDeleteSelected = usePostStore(
@@ -356,12 +414,6 @@ export const DashboardView = React.memo(
       "idle" | "pulling" | "ready" | "refreshing"
     >("idle");
     const touchStartY = useRef<number>(-1);
-    const containerRef = useRef<HTMLDivElement | null>(null);
-    const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
-    const setContainerRef = useCallback((node: HTMLDivElement | null) => {
-      containerRef.current = node;
-      setScrollElement(node);
-    }, []);
 
     const isInitialRestore = useRef(true);
 
@@ -445,7 +497,7 @@ export const DashboardView = React.memo(
     const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
       const target = e.currentTarget;
       savedDashboardScrollTop = target.scrollTop;
-      if (target.scrollTop > 350) {
+      if (target.scrollTop > 500) {
         setShowScrollTop(true);
       } else {
         setShowScrollTop(false);
@@ -454,6 +506,7 @@ export const DashboardView = React.memo(
 
     const scrollToTop = () => {
       if (containerRef.current) {
+        triggerVibration("light");
         containerRef.current.scrollTo({
           top: 0,
           behavior: "smooth",
@@ -461,49 +514,6 @@ export const DashboardView = React.memo(
         savedDashboardScrollTop = 0;
       }
     };
-
-    const [workerStats, setWorkerStats] = useState(() =>
-      getThumbnailStats(posts),
-    );
-    const [isDownloading, setIsDownloading] = useState(() => isWorkerActive());
-
-    useEffect(() => {
-      const updateStats = () => {
-        const currentPosts = usePostStore.getState().posts;
-        setWorkerStats(getThumbnailStats(currentPosts));
-        setIsDownloading(isWorkerActive());
-      };
-
-      registerProgressCallback(updateStats);
-      updateStats();
-
-      return () => {
-        unregisterProgressCallback();
-      };
-    }, [posts]);
-
-    
-
-    // Scraper throttle/rate-limiting status
-    const [throttleStatus, setThrottleStatus] = useState({
-      throttled: false,
-      remaining: 0,
-    });
-
-    // Poll throttle/rate limit status from the background worker
-    useEffect(() => {
-      let timer: any;
-      const checkThrottle = () => {
-        setThrottleStatus(getThrottleStatus());
-      };
-      checkThrottle();
-      if (isDownloading) {
-        timer = setInterval(checkThrottle, 1000);
-      }
-      return () => {
-        if (timer) clearInterval(timer);
-      };
-    }, [isDownloading]);
 
     // Zustand Store
     const setPosts = usePostStore((state) => state.setPosts);
@@ -591,7 +601,6 @@ export const DashboardView = React.memo(
 
     const handleBulkRescrape = async () => {
       if (selectedPostIds.length === 0) return;
-      setIsDownloading(true);
       await Promise.all(
         selectedPostIds.map(async (id) => {
           await db.posts.update(id, {
@@ -610,14 +619,24 @@ export const DashboardView = React.memo(
 
     const handleBulkDelete = async () => {
       if (selectedPostIds.length === 0) return;
+      triggerVibration("light");
+      const count = selectedPostIds.length;
       if (
         confirm(
-          `Are you sure you want to permanently delete these ${selectedPostIds.length} selected posts from your library?`,
+          `Are you sure you want to permanently delete these ${count} selected posts from your library?`,
         )
       ) {
-        await db.posts.bulkDelete(selectedPostIds);
-        bulkDeleteSelected(); // updates store and clears selection
-        
+        triggerVibration("warning");
+        try {
+          await db.posts.bulkDelete(selectedPostIds);
+          bulkDeleteSelected(); // updates store and clears selection
+          toast.success(`Successfully deleted ${count} posts!`, {
+            icon: "🗑️",
+          });
+        } catch (err) {
+          console.error("Bulk delete failed", err);
+          toast.error("Failed to delete selected posts.");
+        }
       }
     };
 
@@ -730,10 +749,12 @@ export const DashboardView = React.memo(
             if (
               prefix === "creator" ||
               prefix === "user" ||
-              prefix === "author"
+              prefix === "author" ||
+              prefix === "from"
             ) {
               tempResult = tempResult.filter((p) =>
-                (p.creatorUsername || "").toLowerCase().includes(valLower),
+                (p.creatorUsername || "").toLowerCase().includes(valLower) ||
+                (p.creatorName || "").toLowerCase().includes(valLower)
               );
             } else if (prefix === "post" || prefix === "caption") {
               tempResult = tempResult.filter((p) =>
@@ -755,6 +776,28 @@ export const DashboardView = React.memo(
                   c.toLowerCase().includes(valLower),
                 ),
               );
+            } else if (prefix === "is") {
+              if (valLower === "favorite" || valLower === "starred") {
+                tempResult = tempResult.filter((p) => p.isFavorite);
+              } else if (valLower === "archived") {
+                tempResult = tempResult.filter((p) => p.isArchived);
+              } else if (valLower === "active" || valLower === "unarchived") {
+                tempResult = tempResult.filter((p) => !p.isArchived);
+              } else if (valLower === "reel") {
+                tempResult = tempResult.filter((p) => p.isReel);
+              } else if (valLower === "video") {
+                tempResult = tempResult.filter((p) => p.mediaType === "video");
+              } else if (valLower === "image") {
+                tempResult = tempResult.filter((p) => p.mediaType === "image");
+              } else if (valLower === "carousel") {
+                tempResult = tempResult.filter((p) => p.mediaType === "carousel");
+              } else if (valLower === "read-later" || valLower === "readlater") {
+                tempResult = tempResult.filter((p) => p.readLater);
+              } else if (valLower === "notes" || valLower === "has-notes") {
+                tempResult = tempResult.filter((p) => p.notes && p.notes.trim().length > 0);
+              } else if (valLower === "location" || valLower === "has-location") {
+                tempResult = tempResult.filter((p) => p.location && p.location.trim().length > 0);
+              }
             }
           });
 
@@ -763,6 +806,7 @@ export const DashboardView = React.memo(
               keys: [
                 "caption",
                 "creatorUsername",
+                "creatorName",
                 "notes",
                 "hashtags",
                 "tags",
@@ -775,7 +819,25 @@ export const DashboardView = React.memo(
             result = tempResult;
           }
         } else {
-          result = fuse.search(deferredSearchQuery).map((r) => r.item);
+          // Smart real-time substring matching on creator, hashtags, caption, and notes as user types
+          const valLower = deferredSearchQuery.toLowerCase();
+          result = posts.filter((p) => {
+            const matchesCreator =
+              (p.creatorUsername || "").toLowerCase().includes(valLower) ||
+              (p.creatorName || "").toLowerCase().includes(valLower);
+            const matchesHashtags =
+              (p.hashtags || []).some((h) => h.toLowerCase().includes(valLower)) ||
+              (p.tags || []).some((t) => t.toLowerCase().includes(valLower));
+            const matchesCaption = (p.caption || "").toLowerCase().includes(valLower);
+            const matchesNotes = (p.notes || "").toLowerCase().includes(valLower);
+
+            return matchesCreator || matchesHashtags || matchesCaption || matchesNotes;
+          });
+
+          // Fallback to fuzzy search if no exact substring matches are found
+          if (result.length === 0) {
+            result = fuse.search(deferredSearchQuery).map((r) => r.item);
+          }
         }
       }
 
@@ -840,6 +902,12 @@ export const DashboardView = React.memo(
         );
       }
 
+      if (visibilityFilter === "visible") {
+        result = result.filter((p) => p.visibility !== "hidden");
+      } else if (visibilityFilter === "hidden") {
+        result = result.filter((p) => p.visibility === "hidden");
+      }
+
       const sorted = [...result];
       sorted.sort((a, b) => {
         let cmp = 0;
@@ -884,11 +952,119 @@ export const DashboardView = React.memo(
       selectedCollections,
       sortBy,
       sortOrder,
-      hideBrokenLinks,
+      visibilityFilter,
       deferredCreatorFilter,
     ]);
 
     const [visibleCount, setVisibleCount] = useState(48);
+
+    const exportFilteredJSON = useCallback(() => {
+      if (filteredPosts.length === 0) {
+        toast.error("No posts to export!");
+        return;
+      }
+
+      try {
+        const dataStr =
+          "data:text/json;charset=utf-8," +
+          encodeURIComponent(JSON.stringify(filteredPosts, null, 2));
+        const downloadAnchorNode = document.createElement("a");
+        downloadAnchorNode.setAttribute("href", dataStr);
+        downloadAnchorNode.setAttribute(
+          "download",
+          `instasorter_filtered_export_${new Date().toISOString().split("T")[0]}.json`,
+        );
+        document.body.appendChild(downloadAnchorNode);
+        downloadAnchorNode.click();
+        downloadAnchorNode.remove();
+        toast.success(`Successfully exported ${filteredPosts.length} posts as JSON!`);
+      } catch (err) {
+        console.error("Failed to export filtered posts:", err);
+        toast.error("Failed to export posts.");
+      }
+    }, [filteredPosts]);
+
+    const exportFilteredCSV = useCallback(() => {
+      if (filteredPosts.length === 0) {
+        toast.error("No posts to export!");
+        return;
+      }
+
+      const escapeCSV = (val: any): string => {
+        if (val === undefined || val === null) return "";
+        let str = "";
+        if (Array.isArray(val)) {
+          str = val.join(";");
+        } else {
+          str = String(val);
+        }
+        const needsQuotes = str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r");
+        if (needsQuotes) {
+          str = '"' + str.replace(/"/g, '""') + '"';
+        }
+        return str;
+      };
+
+      const headers = [
+        "ID",
+        "Post URL",
+        "Creator Username",
+        "Creator Name",
+        "Caption",
+        "Media Type",
+        "Saved At",
+        "Hashtags",
+        "Tags",
+        "Collections",
+        "Is Favorite",
+        "Is Archived",
+        "Read Later",
+        "Is Reel",
+        "Notes",
+        "Location",
+        "Instagram Likes"
+      ];
+
+      const csvRows = [headers.join(",")];
+
+      filteredPosts.forEach((post) => {
+        const row = [
+          escapeCSV(post.id),
+          escapeCSV(post.postUrl),
+          escapeCSV(post.creatorUsername),
+          escapeCSV(post.creatorName),
+          escapeCSV(post.caption),
+          escapeCSV(post.mediaType),
+          escapeCSV(post.savedAt),
+          escapeCSV(post.hashtags),
+          escapeCSV(post.tags),
+          escapeCSV(post.collections),
+          escapeCSV(post.isFavorite),
+          escapeCSV(post.isArchived),
+          escapeCSV(post.readLater),
+          escapeCSV(post.isReel),
+          escapeCSV(post.notes),
+          escapeCSV(post.location),
+          escapeCSV(post.instagramLikes)
+        ];
+        csvRows.push(row.join(","));
+      });
+
+      const csvContent = "\ufeff" + csvRows.join("\r\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const downloadAnchorNode = document.createElement("a");
+      downloadAnchorNode.setAttribute("href", url);
+      downloadAnchorNode.setAttribute(
+        "download",
+        `instasorter_filtered_export_${new Date().toISOString().split("T")[0]}.csv`,
+      );
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Successfully exported ${filteredPosts.length} posts as CSV!`);
+    }, [filteredPosts]);
 
     useEffect(() => {
       setVisibleCount(48);
@@ -904,13 +1080,88 @@ export const DashboardView = React.memo(
       selectedCollections,
       sortBy,
       sortOrder,
-      hideBrokenLinks,
+      visibilityFilter,
       deferredCreatorFilter,
     ]);
 
     const visiblePosts = useMemo(() => {
       return filteredPosts.slice(0, visibleCount);
     }, [filteredPosts, visibleCount]);
+
+    const filterKey = useMemo(() => {
+      return [
+        searchQuery,
+        creatorFilter || "",
+        filterFavoriteOnly ? "fav" : "all",
+        filterArchived,
+        filterMediaType,
+        filterHasNotes ? "notes" : "no-notes",
+        filterHasLocation ? "loc" : "no-loc",
+        filterHasHashtags ? "tags" : "no-tags",
+        selectedTags.join(","),
+        selectedCollections.join(","),
+        sortBy,
+        sortOrder,
+        visiblePosts.length
+      ].join("|");
+    }, [
+      searchQuery,
+      creatorFilter,
+      filterFavoriteOnly,
+      filterArchived,
+      filterMediaType,
+      filterHasNotes,
+      filterHasLocation,
+      filterHasHashtags,
+      selectedTags,
+      selectedCollections,
+      sortBy,
+      sortOrder,
+      visiblePosts.length
+    ]);
+
+    // Library Stats Storage Estimation (JSON serialized posts representation in IndexedDB)
+    const formattedPayloadSize = useMemo(() => {
+      if (!posts || posts.length === 0) return "0 B";
+      try {
+        const jsonString = JSON.stringify(posts);
+        const bytes = jsonString.length;
+        if (bytes < 1024) return `${bytes} B`;
+        const kb = bytes / 1024;
+        if (kb < 1024) return `${kb.toFixed(1)} KB`;
+        const mb = kb / 1024;
+        return `${mb.toFixed(1)} MB`;
+      } catch (e) {
+        console.error("Payload size estimation error:", e);
+        return "N/A";
+      }
+    }, [posts]);
+
+    // Estimated disk storage usage from browser navigator API
+    const [browserStorage, setBrowserStorage] = useState<{ usage: number; quota: number } | null>(null);
+
+    useEffect(() => {
+      if (navigator.storage && navigator.storage.estimate) {
+        navigator.storage.estimate().then((est) => {
+          setBrowserStorage({
+            usage: est.usage || 0,
+            quota: est.quota || 0,
+          });
+        }).catch((err) => {
+          console.error("Storage estimation error:", err);
+        });
+      }
+    }, [posts]);
+
+    const formattedBrowserSize = useMemo(() => {
+      if (!browserStorage || !browserStorage.usage) return null;
+      const bytes = browserStorage.usage;
+      if (bytes < 1024) return `${bytes} B`;
+      const kb = bytes / 1024;
+      if (kb < 1024) return `${kb.toFixed(1)} KB`;
+      const mb = kb / 1024;
+      return `${mb.toFixed(1)} MB`;
+    }, [browserStorage]);
 
     // Keyboard Navigation inside Main View
     useEffect(() => {
@@ -944,7 +1195,7 @@ export const DashboardView = React.memo(
         // 1.5 Global shortcuts inside Dashboard View
         if (e.key === "/") {
           e.preventDefault();
-          const searchInput = document.getElementById("search-input");
+          const searchInput = document.getElementById("curator-search-input");
           if (searchInput) searchInput.focus();
           return;
         }
@@ -1146,10 +1397,43 @@ export const DashboardView = React.memo(
       collection: string,
     ) => {
       if (!collection) return;
-      if (action === "add") {
-        bulkAddToCollection(collection);
-      } else {
-        bulkRemoveFromCollection(collection);
+      const count = selectedPostIds.length;
+      if (count === 0) {
+        toast.error("No posts selected to update collections.");
+        return;
+      }
+
+      try {
+        await Promise.all(
+          selectedPostIds.map(async (id) => {
+            const post = await db.posts.get(id);
+            if (post) {
+              const currentCollections = post.collections || [];
+              let nextCollections: string[];
+              if (action === "add") {
+                nextCollections = Array.from(new Set([...currentCollections, collection]));
+              } else {
+                nextCollections = currentCollections.filter((c) => c !== collection);
+              }
+              await db.posts.update(id, { collections: nextCollections });
+            }
+          }),
+        );
+
+        if (action === "add") {
+          bulkAddToCollection(collection);
+          toast.success(`Successfully added ${count} posts to collection "${collection}"`, {
+            icon: "📁",
+          });
+        } else {
+          bulkRemoveFromCollection(collection);
+          toast.success(`Successfully removed ${count} posts from collection "${collection}"`, {
+            icon: "📁",
+          });
+        }
+      } catch (err) {
+        console.error("Bulk collection update failed", err);
+        toast.error("Failed to update collections.");
       }
       setBulkCollection("");
     };
@@ -1177,6 +1461,10 @@ export const DashboardView = React.memo(
       setSelectedTags([]);
       setSelectedCollections([]);
       setSearchQuery("");
+      setVisibilityFilter("visible");
+      if (setCreatorFilter) {
+        setCreatorFilter("");
+      }
     };
 
     const activeFiltersCount = useMemo(() => {
@@ -1188,6 +1476,7 @@ export const DashboardView = React.memo(
       if (filterHasHashtags) count++;
       if (startDate) count++;
       if (endDate) count++;
+      if (visibilityFilter !== "visible") count++;
       count += selectedTags.length;
       count += selectedCollections.length;
       return count;
@@ -1202,9 +1491,10 @@ export const DashboardView = React.memo(
       endDate,
       selectedTags,
       selectedCollections,
+      visibilityFilter,
     ]);
 
-    const hasActiveFilters = activeFiltersCount > 0 || searchQuery;
+    const hasActiveFilters = activeFiltersCount > 0 || searchQuery || !!creatorFilter;
 
     // Derive Header Info depending on active path view
     const viewInfo = useMemo(() => {
@@ -1237,548 +1527,7 @@ export const DashboardView = React.memo(
 
     return (
       <div className="flex flex-1 min-h-0 overflow-hidden bg-m3-surface text-m3-on-surface relative">
-        {/* Backdropped Frosted Center Modal for Sorting & Filtering */}
-        <AnimatePresence>
-          {isSidebarOpen && (
-            <>
-              {/* Dark blur backdrop */}
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                onClick={() => setIsSidebarOpen(false)}
-                className="fixed inset-0 bg-black/40 backdrop-blur-xs z-40 cursor-pointer"
-              />
 
-              {/* Floating Dialog Panel */}
-              <motion.div
-                initial={{ scale: 0.95, opacity: 0 }}
-                animate={{ scale: 1, opacity: 1 }}
-                exit={{ scale: 0.95, opacity: 0 }}
-                transition={{ type: "spring", damping: 25, stiffness: 350 }}
-                className="fixed inset-0 m-auto w-[calc(100%-2rem)] md:w-full max-w-3xl h-[85vh] max-h-[700px] bg-m3-surface-low/90 backdrop-blur-3xl border border-m3-outline-variant/30 flex flex-col overflow-hidden z-50 shadow-glass-lg rounded-3xl"
-              >
-                <div className="p-5 border-b border-m3-outline-variant/20 flex items-center justify-between bg-m3-surface-low shrink-0">
-                  <div className="flex items-center gap-2.5 font-bold font-display text-m3-on-surface text-base">
-                    <SlidersHorizontal size={18} className="text-m3-primary" />
-                    <span>{VOCABULARY.dashboard.sortFilterTitle}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    {hasActiveFilters && (
-                      <button
-                        onClick={clearAllFilters}
-                        className="text-xs font-bold text-m3-primary hover:bg-m3-primary/5 px-2.5 py-1.5 rounded-full transition-colors cursor-pointer"
-                      >
-                        Reset Filters
-                      </button>
-                    )}
-                    <button
-                      onClick={() => setIsSidebarOpen(false)}
-                      className="p-1.5 hover:bg-m3-surface-variant/40 rounded-full transition-colors text-m3-on-surface-variant hover:text-m3-on-surface cursor-pointer"
-                      title="Close"
-                    >
-                      <X size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-hidden p-6">
-                  <div className="grid grid-cols-1 md:grid-cols-12 gap-6 h-full overflow-hidden">
-                    {/* Left Column: Sort Settings */}
-                    <div className="md:col-span-5 flex flex-col h-full overflow-y-auto pr-0 md:pr-6 border-b md:border-b-0 md:border-r border-m3-outline-variant/10 pb-6 md:pb-0 gap-5 scrollbar-none">
-                      <div className="flex flex-col gap-3">
-                        <h3 className="text-[11px] font-bold text-m3-outline uppercase tracking-wider pl-1">
-                          Sort Options
-                        </h3>
-                        <div className="space-y-2">
-                          {sortOptions.map((opt) => {
-                            const isSelected = sortBy === opt.value;
-                            return (
-                              <button
-                                key={opt.value}
-                                onClick={() => setSortBy(opt.value)}
-                                className={`w-full text-left px-3.5 py-2 rounded-xl text-xs font-semibold border flex items-center justify-between transition-all cursor-pointer ${
-                                  isSelected
-                                    ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container font-bold shadow-xs"
-                                    : "bg-m3-surface border-m3-outline-variant/20 text-m3-on-surface-variant hover:bg-m3-surface-variant/25"
-                                }`}
-                              >
-                                <span>{opt.label}</span>
-                                {isSelected && (
-                                  <Check size={12} className="stroke-[2.5]" />
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col gap-2">
-                        <span className="text-[11px] font-bold text-m3-outline uppercase tracking-wider pl-1">
-                          Sort Direction
-                        </span>
-                        <div className="grid grid-cols-2 gap-2">
-                          <button
-                            onClick={() => setSortOrder("desc")}
-                            className={`py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                              sortOrder === "desc"
-                                ? "bg-m3-primary border-m3-primary text-m3-on-primary shadow-xs"
-                                : "bg-m3-surface border-m3-outline-variant/20 text-m3-on-surface-variant hover:bg-m3-surface-variant/25"
-                            }`}
-                          >
-                            Descending
-                          </button>
-                          <button
-                            onClick={() => setSortOrder("asc")}
-                            className={`py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
-                              sortOrder === "asc"
-                                ? "bg-m3-primary border-m3-primary text-m3-on-primary shadow-xs"
-                                : "bg-m3-surface border-m3-outline-variant/20 text-m3-on-surface-variant hover:bg-m3-surface-variant/25"
-                            }`}
-                          >
-                            Ascending
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Right Column: Filter Settings */}
-                    <div className="md:col-span-7 flex flex-col h-full overflow-y-auto gap-6 pr-2 scrollbar-thin">
-                      {/* General Filter Block */}
-                      <div className="flex flex-col gap-4">
-                        <h3 className="text-[11px] font-bold text-m3-outline uppercase tracking-wider pl-1">
-                          Filter Options
-                        </h3>
-
-                        {/* Starred Favorite filter chip toggle */}
-                        <button
-                          onClick={() =>
-                            setFilterFavoriteOnly(!filterFavoriteOnly)
-                          }
-                          className={`w-full flex items-center justify-between p-3 rounded-2xl transition-all border cursor-pointer ${
-                            filterFavoriteOnly
-                              ? "bg-m3-primary/10 border-m3-primary text-m3-primary dark:bg-amber-950/40 dark:border-m3-primary dark:text-m3-primary shadow-xs font-bold"
-                              : "bg-m3-surface hover:bg-m3-surface-variant/30 border-m3-outline-variant/30 text-m3-on-surface-variant"
-                          }`}
-                        >
-                          <span className="flex items-center gap-2">
-                            <Heart
-                              size={15}
-                              fill={
-                                filterFavoriteOnly ? "currentColor" : "none"
-                              }
-                              className={
-                                filterFavoriteOnly
-                                  ? "text-m3-primary fill-m3-primary"
-                                  : ""
-                              }
-                            />
-                            <span>Starred Favorites</span>
-                          </span>
-                          {filterFavoriteOnly && (
-                            <Check size={14} className="stroke-[2.5]" />
-                          )}
-                        </button>
-
-                        {/* Broken links filter chip toggle */}
-                        {brokenCount > 0 && (
-                          <button
-                            onClick={() => setHideBrokenLinks(!hideBrokenLinks)}
-                            className={`w-full flex items-center justify-between p-3 rounded-2xl transition-all border cursor-pointer ${
-                              !hideBrokenLinks
-                                ? "bg-m3-error-container text-m3-on-error-container border-m3-error-container/60 shadow-xs font-bold"
-                                : "bg-m3-surface hover:bg-m3-surface-variant/30 border-m3-outline-variant/30 text-m3-on-surface-variant"
-                            }`}
-                          >
-                            <span className="flex items-center gap-2">
-                              <AlertCircle
-                                size={15}
-                                className={
-                                  !hideBrokenLinks ? "text-m3-error" : ""
-                                }
-                              />
-                              <span>
-                                {hideBrokenLinks
-                                  ? "Show broken posts"
-                                  : "Hide broken posts"}{" "}
-                                ({brokenCount})
-                              </span>
-                            </span>
-                            {!hideBrokenLinks && (
-                              <Check size={14} className="stroke-[2.5]" />
-                            )}
-                          </button>
-                        )}
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {/* Media Format Type Filter */}
-                          <div className="flex flex-col gap-1.5">
-                            <label className="text-xs font-semibold text-m3-on-surface-variant pl-1">
-                              Media Format
-                            </label>
-                            <select
-                              value={filterMediaType}
-                              onChange={(e) =>
-                                setFilterMediaType(e.target.value)
-                              }
-                              className="w-full px-3 py-2 text-xs bg-m3-surface text-m3-on-surface border border-m3-outline-variant/40 rounded-xl focus:border-m3-primary focus:outline-none transition-all cursor-pointer"
-                            >
-                              <option value="all">Show All Formats</option>
-                              {allMediaTypes.map((m) => (
-                                <option
-                                  key={m}
-                                  value={m}
-                                  className="capitalize"
-                                >
-                                  {m}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          {/* Status Archive Filter (only if not forced by route) */}
-                          {initialFilterArchived !== "archived" && (
-                            <div className="flex flex-col gap-1.5">
-                              <label className="text-xs font-semibold text-m3-on-surface-variant pl-1">
-                                Archive Status
-                              </label>
-                              <select
-                                value={filterArchived}
-                                onChange={(e) =>
-                                  setFilterArchived(e.target.value as any)
-                                }
-                                className="w-full px-3 py-2 text-xs bg-m3-surface text-m3-on-surface border border-m3-outline-variant/40 rounded-xl focus:border-m3-primary focus:outline-none transition-all cursor-pointer"
-                              >
-                                <option value="all">All States</option>
-                                <option value="active">Active Only</option>
-                                <option value="archived">Archived Only</option>
-                              </select>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Date Filters */}
-                        <div className="flex flex-col gap-1.5 border-t border-m3-outline-variant/10 pt-3">
-                          <label className="text-xs font-semibold text-m3-on-surface-variant pl-1">
-                            Saved Date Range
-                          </label>
-                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-1 mb-1">
-                            {[
-                              { id: "all", label: "All Time" },
-                              { id: "today", label: "Today" },
-                              { id: "7days", label: "7 Days" },
-                              { id: "30days", label: "30 Days" },
-                              { id: "thisyear", label: "This Year" },
-                            ].map((preset) => {
-                              let isActive = false;
-                              const todayStr = new Date()
-                                .toISOString()
-                                .split("T")[0];
-                              if (preset.id === "all" && !startDate && !endDate)
-                                isActive = true;
-                              else if (
-                                preset.id === "today" &&
-                                startDate === todayStr &&
-                                endDate === todayStr
-                              )
-                                isActive = true;
-                              else if (preset.id === "7days") {
-                                const sevenDaysAgo = new Date();
-                                sevenDaysAgo.setDate(
-                                  sevenDaysAgo.getDate() - 7,
-                                );
-                                const sevenStr = sevenDaysAgo
-                                  .toISOString()
-                                  .split("T")[0];
-                                if (
-                                  startDate === sevenStr &&
-                                  endDate === todayStr
-                                )
-                                  isActive = true;
-                              } else if (preset.id === "30days") {
-                                const thirtyDaysAgo = new Date();
-                                thirtyDaysAgo.setDate(
-                                  thirtyDaysAgo.getDate() - 30,
-                                );
-                                const thirtyStr = thirtyDaysAgo
-                                  .toISOString()
-                                  .split("T")[0];
-                                if (
-                                  startDate === thirtyStr &&
-                                  endDate === todayStr
-                                )
-                                  isActive = true;
-                              } else if (preset.id === "thisyear") {
-                                const yrStart = new Date(
-                                  new Date().getFullYear(),
-                                  0,
-                                  1,
-                                )
-                                  .toISOString()
-                                  .split("T")[0];
-                                if (
-                                  startDate === yrStart &&
-                                  endDate === todayStr
-                                )
-                                  isActive = true;
-                              }
-
-                              return (
-                                <button
-                                  key={preset.id}
-                                  type="button"
-                                  onClick={() =>
-                                    handleDatePreset(preset.id as any)
-                                  }
-                                  className={`px-1.5 py-1 rounded-lg text-[9px] font-bold border transition-all cursor-pointer ${
-                                    isActive
-                                      ? "bg-m3-primary/15 border-m3-primary/30 text-m3-primary font-bold"
-                                      : "bg-m3-surface hover:bg-m3-surface-variant/15 border-m3-outline-variant/20 text-m3-on-surface-variant"
-                                  }`}
-                                >
-                                  {preset.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div className="flex flex-col gap-0.5">
-                              <span className="text-[9px] text-m3-outline uppercase pl-1">
-                                From
-                              </span>
-                              <input
-                                type="date"
-                                value={startDate}
-                                onChange={(e) => setStartDate(e.target.value)}
-                                className="px-3 py-1.5 text-xs text-m3-on-surface-variant bg-m3-surface rounded-xl border border-m3-outline-variant/40 focus:border-m3-primary focus:outline-none"
-                              />
-                            </div>
-                            <div className="flex flex-col gap-0.5">
-                              <span className="text-[9px] text-m3-outline uppercase pl-1">
-                                To
-                              </span>
-                              <input
-                                type="date"
-                                value={endDate}
-                                onChange={(e) => setEndDate(e.target.value)}
-                                className="px-3 py-1.5 text-xs text-m3-on-surface-variant bg-m3-surface rounded-xl border border-m3-outline-variant/40 focus:border-m3-primary focus:outline-none"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Rich Metadata Filter Block */}
-                      <div className="flex flex-col gap-3 pt-4 border-t border-m3-outline-variant/10">
-                        <h3 className="text-[11px] font-bold text-m3-outline uppercase tracking-wider pl-1 flex items-center gap-1.5">
-                          <Sparkles
-                            size={13}
-                            className="text-m3-primary animate-pulse"
-                          />{" "}
-                          Rich Metadata
-                        </h3>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          {/* Has Notes */}
-                          <button
-                            onClick={() => setFilterHasNotes(!filterHasNotes)}
-                            className={`flex items-center justify-between p-2.5 rounded-xl transition-all border text-xs cursor-pointer ${
-                              filterHasNotes
-                                ? "bg-m3-primary-container text-m3-on-primary-container border-m3-primary/50 font-bold"
-                                : "bg-m3-surface hover:bg-m3-surface-variant/30 border-m3-outline-variant/30 text-m3-on-surface-variant"
-                            }`}
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <BookOpen
-                                size={13}
-                                className={
-                                  filterHasNotes
-                                    ? "text-m3-primary"
-                                    : "text-m3-outline"
-                                }
-                              />
-                              <span>Has Notes</span>
-                            </span>
-                            {filterHasNotes && (
-                              <Check size={12} className="stroke-[2.5]" />
-                            )}
-                          </button>
-
-                          {/* Has Location */}
-                          <button
-                            onClick={() =>
-                              setFilterHasLocation(!filterHasLocation)
-                            }
-                            className={`flex items-center justify-between p-2.5 rounded-xl transition-all border text-xs cursor-pointer ${
-                              filterHasLocation
-                                ? "bg-m3-primary-container text-m3-on-primary-container border-m3-primary/50 font-bold"
-                                : "bg-m3-surface hover:bg-m3-surface-variant/30 border-m3-outline-variant/30 text-m3-on-surface-variant"
-                            }`}
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <Compass
-                                size={13}
-                                className={
-                                  filterHasLocation
-                                    ? "text-m3-primary"
-                                    : "text-m3-outline"
-                                }
-                              />
-                              <span>Has Location</span>
-                            </span>
-                            {filterHasLocation && (
-                              <Check size={12} className="stroke-[2.5]" />
-                            )}
-                          </button>
-
-                          {/* Has Hashtags */}
-                          <button
-                            onClick={() =>
-                              setFilterHasHashtags(!filterHasHashtags)
-                            }
-                            className={`flex items-center justify-between p-2.5 rounded-xl transition-all border text-xs cursor-pointer ${
-                              filterHasHashtags
-                                ? "bg-m3-primary-container text-m3-on-primary-container border-m3-primary/50 font-bold"
-                                : "bg-m3-surface hover:bg-m3-surface-variant/30 border-m3-outline-variant/30 text-m3-on-surface-variant"
-                            }`}
-                          >
-                            <span className="flex items-center gap-1.5">
-                              <Hash
-                                size={13}
-                                className={
-                                  filterHasHashtags
-                                    ? "text-m3-primary"
-                                    : "text-m3-outline"
-                                }
-                              />
-                              <span>Has Hashtags</span>
-                            </span>
-                            {filterHasHashtags && (
-                              <Check size={12} className="stroke-[2.5]" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* M3 Interactive Filter Chips for Tags */}
-                      <div className="space-y-3 pt-3 border-t border-m3-outline-variant/10">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-[11px] font-bold text-m3-outline uppercase tracking-wider pl-1 flex items-center gap-1.5">
-                            <Tag size={13} className="text-m3-primary" /> Filter
-                            by Tags
-                          </h3>
-                          {allTags.length > 5 && (
-                            <input
-                              placeholder="Filter tags..."
-                              value={tagSearchQuery}
-                              onChange={(e) =>
-                                setTagSearchQuery(e.target.value)
-                              }
-                              className="px-2 py-0.5 text-[10px] w-28 border border-m3-outline-variant/20 bg-m3-surface text-m3-on-surface rounded-md focus:outline-none focus:border-m3-primary"
-                            />
-                          )}
-                        </div>
-
-                        {filteredTagsInSidebar.length > 0 ? (
-                          <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto p-1.5 bg-m3-surface-container/30 rounded-2xl border border-m3-outline-variant/10">
-                            {filteredTagsInSidebar.map((tag) => {
-                              const isSelected = selectedTags.includes(tag);
-                              return (
-                                <button
-                                  key={tag}
-                                  onClick={() => toggleTagFilter(tag)}
-                                  className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border flex items-center gap-1 transition-all cursor-pointer ${
-                                    isSelected
-                                      ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container shadow-xs font-bold"
-                                      : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
-                                  }`}
-                                >
-                                  {isSelected && (
-                                    <Check size={10} className="stroke-[2.5]" />
-                                  )}
-                                  <span>#{tag}</span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <p className="text-xs italic text-m3-outline pl-1">
-                            No matching tags found.
-                          </p>
-                        )}
-                      </div>
-
-                      {/* M3 Filter Chips for Collections */}
-                      <div className="space-y-3 pt-3 border-t border-m3-outline-variant/10">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-[11px] font-bold text-m3-outline uppercase tracking-wider pl-1 flex items-center gap-1.5">
-                            <Folder size={13} className="text-m3-primary" />{" "}
-                            Filter by Collections
-                          </h3>
-                          {allCollections.length > 4 && (
-                            <input
-                              placeholder="Filter collections..."
-                              value={collectionSearchQuery}
-                              onChange={(e) =>
-                                setCollectionSearchQuery(e.target.value)
-                              }
-                              className="px-2 py-0.5 text-[10px] w-32 border border-m3-outline-variant/20 bg-m3-surface text-m3-on-surface rounded-md focus:outline-none focus:border-m3-primary"
-                            />
-                          )}
-                        </div>
-
-                        {filteredCollectionsInSidebar.length > 0 ? (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto p-1 bg-m3-surface-container/20 rounded-2xl border border-m3-outline-variant/10">
-                            {filteredCollectionsInSidebar.map((col) => {
-                              const isSelected =
-                                selectedCollections.includes(col);
-                              return (
-                                <button
-                                  key={col}
-                                  onClick={() => toggleCollectionFilter(col)}
-                                  className={`flex justify-between items-center px-2.5 py-1.5 rounded-xl text-left border text-[11px] font-semibold transition-all cursor-pointer ${
-                                    isSelected
-                                      ? "bg-m3-secondary-container text-m3-on-secondary-container border-m3-secondary-container shadow-xs font-bold"
-                                      : "bg-m3-surface border-m3-outline-variant/20 hover:border-m3-outline text-m3-on-surface-variant hover:text-m3-on-surface"
-                                  }`}
-                                >
-                                  <span className="flex items-center gap-1.5 truncate max-w-[75%]">
-                                    <Folder
-                                      size={11}
-                                      className={
-                                        isSelected
-                                          ? "text-m3-secondary"
-                                          : "text-m3-outline"
-                                      }
-                                    />
-                                    <span className="truncate">{col}</span>
-                                  </span>
-                                  <span
-                                    className={`px-1.5 py-0.2 rounded-full text-[9px] font-bold ${
-                                      isSelected
-                                        ? "bg-m3-surface/30 text-m3-on-secondary-container"
-                                        : "bg-m3-surface-variant text-m3-on-surface-variant"
-                                    }`}
-                                  >
-                                    {collectionCounts[col]}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          <p className="text-xs italic text-m3-outline pl-1">
-                            No matching collections found.
-                          </p>
-                        )}
-                      </div>
-                      <SmartRulesManager />
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            </>
-          )}
-        </AnimatePresence>
 
         {/* Right Column / Primary Applet Dashboard Contents */}
         <div className="flex-1 flex flex-col overflow-hidden h-full">
@@ -1799,11 +1548,7 @@ export const DashboardView = React.memo(
                     </button>
                   </div>
                   <button
-                    onClick={() => {
-                      if (confirm(`Delete ${selectedPostIds.length} posts?`)) {
-                        usePostStore.getState().bulkDeleteSelected();
-                      }
-                    }}
+                    onClick={handleBulkDelete}
                     className="flex items-center gap-1 px-3 py-1 bg-red-100 text-red-700 rounded-lg text-[11px] font-bold hover:bg-red-200 transition-all cursor-pointer"
                   >
                     <Trash2 size={12} />
@@ -1812,75 +1557,203 @@ export const DashboardView = React.memo(
                 </div>
               ) : (
                 <>
-                  {/* Left side: View title, inline badge */}
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    <div className="w-8 h-8 rounded-lg bg-m3-surface-container flex items-center justify-center border border-m3-outline-variant/10 shrink-0">
-                      {React.cloneElement(viewInfo.icon, { size: 16 })}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm md:text-base font-bold font-display text-m3-on-surface tracking-tight leading-none">
-                        {viewInfo.title}
-                      </h2>
-                      <span
-                        className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${viewInfo.badgeBg} shrink-0`}
-                      >
-                        {posts.length > 0 ? `${filteredPosts.length}` : "0"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Right side: Compact inline search and layout/filter controls */}
+                  {/* Right side: Compact layout selectors & unified Curator Bar Toggle */}
                   {posts.length > 0 && (
-                    <div className="flex flex-wrap md:flex-nowrap items-center gap-2 md:gap-3 flex-1 md:flex-initial justify-between md:justify-end">
-                      {/* Modern Search bar */}
-                      <div className="relative flex-1 max-w-xs md:max-w-[200px] lg:max-w-[260px] min-w-[120px]">
-                        <span className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-m3-outline">
-                          <Search size={13} />
+                    <div className="flex items-center gap-2.5 md:gap-3 flex-1 md:flex-initial justify-end ml-auto">
+                      {/* Dashboard Search Input - adjacent to Sort & Filter button */}
+                      <div className="relative w-36 sm:w-48 md:w-60 lg:w-64 shrink-0">
+                        <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 pointer-events-none text-m3-outline">
+                          <Search size={12} />
                         </span>
                         <input
-                          id="search-input"
-                          placeholder={VOCABULARY.dashboard.searchPlaceholder}
+                          placeholder="Search feed..."
                           value={localSearchQuery}
                           onChange={(e) => setLocalSearchQuery(e.target.value)}
-                          className="pl-8 pr-8 py-1.5 w-full border border-m3-outline-variant/40 bg-m3-surface text-m3-on-surface hover:border-m3-outline focus:border-m3-primary focus:ring-1 focus:ring-m3-primary rounded-lg text-xs focus:outline-none transition-all shadow-glass-sm"
+                          onFocus={() => setIsSearchDropdownOpen(true)}
+                          onBlur={() => setTimeout(() => setIsSearchDropdownOpen(false), 250)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              saveSearchQuery(localSearchQuery);
+                              (e.target as HTMLInputElement).blur();
+                            }
+                          }}
+                          className="pl-7 pr-7 py-1 w-full border border-m3-outline-variant/30 bg-m3-surface-container-low text-m3-on-surface hover:border-m3-outline focus:border-m3-primary focus:bg-m3-surface rounded-lg text-[11px] focus:outline-none transition-all h-8 font-sans"
                         />
-                        {searchQuery && (
+                        {localSearchQuery && (
                           <button
-                            onClick={() => setSearchQuery("")}
+                            onClick={() => {
+                              setLocalSearchQuery("");
+                              setSearchQuery("");
+                            }}
                             className="absolute inset-y-0 right-0 flex items-center pr-2.5 text-m3-outline hover:text-m3-on-surface transition-all cursor-pointer"
-                            title="Clear search query"
                           >
                             <X size={12} />
                           </button>
                         )}
+
+                        {/* Recent & Advanced Search Dropdown linked inline */}
+                        {isSearchDropdownOpen && (
+                          <div className="absolute top-full right-0 mt-1.5 w-64 bg-m3-surface border border-m3-outline-variant/30 rounded-2xl shadow-lg z-50 overflow-hidden font-sans">
+                            {/* Search Syntax Guide & Shortcuts */}
+                            <div className="p-2.5 border-b border-m3-outline-variant/15 select-none bg-m3-surface-low/50">
+                              <div className="text-[9px] font-bold text-m3-outline uppercase tracking-wider mb-1.5 font-display text-left">
+                                Search Shortcuts
+                              </div>
+                              <div className="grid grid-cols-2 gap-1">
+                                <button
+                                  onMouseDown={() => handleShortcutClick("from:", false)}
+                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
+                                >
+                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">from:user</span>
+                                </button>
+                                <button
+                                  onMouseDown={() => handleShortcutClick("tag:", false)}
+                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
+                                >
+                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">tag:design</span>
+                                </button>
+                                <button
+                                  onMouseDown={() => handleShortcutClick("collection:", false)}
+                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
+                                >
+                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">folder:</span>
+                                </button>
+                                <button
+                                  onMouseDown={() => handleShortcutClick("is:favorite", true)}
+                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
+                                >
+                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">is:favorite</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {recentSearches.length > 0 && (
+                              <>
+                                <div className="px-2.5 py-1 border-b border-m3-outline-variant/20 flex items-center justify-between text-[9px] font-bold text-m3-outline uppercase tracking-wider select-none font-display">
+                                  <span>Recent</span>
+                                  <button
+                                    onMouseDown={handleClearAllRecentSearches}
+                                    className="text-red-500 hover:text-red-600 transition-all cursor-pointer font-bold uppercase text-[8px] tracking-wide"
+                                  >
+                                    Clear
+                                  </button>
+                                </div>
+                                <div className="max-h-24 overflow-y-auto">
+                                  {recentSearches.map((term, index) => (
+                                    <div
+                                      key={term + index}
+                                      onMouseDown={() => {
+                                        setLocalSearchQuery(term);
+                                        setSearchQuery(term);
+                                        saveSearchQuery(term);
+                                      }}
+                                      className="px-2.5 py-1 flex items-center justify-between hover:bg-m3-surface-variant/20 cursor-pointer group/item transition-colors"
+                                    >
+                                      <div className="flex items-center gap-1.5 text-[10px] text-m3-on-surface min-w-0 flex-1 select-none font-sans text-left">
+                                        <History size={9} className="text-m3-outline shrink-0" />
+                                        <span className="truncate">{term}</span>
+                                      </div>
+                                      <button
+                                        onMouseDown={(e) => handleDeleteRecentSearch(e, term)}
+                                        className="w-4 h-4 rounded-md flex items-center justify-center text-m3-outline hover:text-red-500 hover:bg-m3-surface-variant/40 transition-all opacity-0 group-hover/item:opacity-100"
+                                        title="Remove"
+                                      >
+                                        <X size={8} />
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
 
-                      {/* Sort & Filter Trigger Button */}
+                      {/* Export Filtered Feed Dropdown */}
+                      <div className="relative" ref={exportDropdownRef}>
+                        <button
+                          onClick={() => setIsExportDropdownOpen(!isExportDropdownOpen)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-bold transition-all cursor-pointer h-8 ${
+                            isExportDropdownOpen
+                              ? "bg-m3-primary border-m3-primary text-m3-on-primary"
+                              : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                          }`}
+                          title="Export current filtered post library"
+                        >
+                          <Download size={13} />
+                          <span className="hidden sm:inline">Export Feed</span>
+                          <ChevronDown size={12} className={`transition-transform duration-200 ${isExportDropdownOpen ? "rotate-180" : ""}`} />
+                        </button>
+                        
+                        <AnimatePresence>
+                          {isExportDropdownOpen && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 8, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 8, scale: 0.95 }}
+                              transition={{ duration: 0.15 }}
+                              className="absolute right-0 mt-1.5 w-48 bg-m3-surface border border-m3-outline-variant/40 backdrop-blur-md rounded-xl shadow-glass-md py-1.5 z-50 flex flex-col"
+                            >
+                              <div className="px-3 py-1 text-[10px] font-bold text-m3-outline uppercase tracking-wider select-none">
+                                Export {filteredPosts.length} posts
+                              </div>
+                              <button
+                                onClick={() => {
+                                  exportFilteredJSON();
+                                  setIsExportDropdownOpen(false);
+                                }}
+                                className="flex items-center gap-2 px-3 py-1.5 text-xs text-m3-on-surface hover:bg-m3-surface-variant/30 transition-colors text-left font-medium cursor-pointer"
+                              >
+                                <div className="w-5 h-5 rounded-md bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
+                                  <span className="text-[10px] font-bold font-mono">JS</span>
+                                </div>
+                                <div className="flex flex-col">
+                                  <span>JSON Backup</span>
+                                  <span className="text-[9px] text-m3-outline font-normal">Full raw structure</span>
+                                </div>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  exportFilteredCSV();
+                                  setIsExportDropdownOpen(false);
+                                }}
+                                className="flex items-center gap-2 px-3 py-1.5 text-xs text-m3-on-surface hover:bg-m3-surface-variant/30 transition-colors text-left font-medium cursor-pointer"
+                              >
+                                <div className="w-5 h-5 rounded-md bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+                                  <span className="text-[10px] font-bold font-mono">CS</span>
+                                </div>
+                                <div className="flex flex-col">
+                                  <span>CSV Spreadsheet</span>
+                                  <span className="text-[9px] text-m3-outline font-normal">For Excel or Sheets</span>
+                                </div>
+                              </button>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      {/* Unified Curator Bar Toggle Button */}
                       <button
-                        onClick={() => setIsSidebarOpen(true)}
+                        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
                         className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-bold transition-all cursor-pointer h-8 ${
                           isSidebarOpen
-                            ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container"
+                            ? "bg-m3-primary border-m3-primary text-m3-on-primary"
                             : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                         }`}
-                        title="Open Sort & Filter configurations"
+                        title="Toggle Curator Bar Search & Filters"
                       >
                         <SlidersHorizontal size={13} />
-                        <span className="hidden sm:inline">
-                          Sort &amp; Filter
-                        </span>
-                        {activeFiltersCount > 0 && (
-                          <span className="w-4 h-4 rounded-full bg-m3-primary text-m3-on-primary text-[9px] font-bold flex items-center justify-center shrink-0">
-                            {activeFiltersCount}
-                          </span>
+                        <span className="hidden sm:inline">Curator Bar</span>
+                        {hasActiveFilters && (
+                          <span className={`w-1.5 h-1.5 rounded-full ${isSidebarOpen ? "bg-white" : "bg-m3-primary"} shrink-0`} />
                         )}
                       </button>
 
                       {/* Layout Selector */}
-                      <div className="flex items-center bg-m3-surface-variant/20 border border-m3-outline-variant/20 rounded-lg p-0.5 shrink-0 h-9 sm:h-8">
+                      <div className="flex items-center bg-m3-surface-variant/20 border border-m3-outline-variant/20 rounded-lg p-0.5 shrink-0 h-8">
                         <button
                           onClick={() => setGridDensity("single")}
-                          className={`flex items-center justify-center w-10 sm:w-8 h-8 sm:h-7 rounded-md transition-all cursor-pointer ${
+                          className={`flex items-center justify-center w-8 h-7 rounded-md transition-all cursor-pointer ${
                             gridDensity === "single"
                               ? "bg-m3-primary text-m3-on-primary shadow-xs"
                               : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
@@ -1891,7 +1764,7 @@ export const DashboardView = React.memo(
                         </button>
                         <button
                           onClick={() => setGridDensity("double")}
-                          className={`flex items-center justify-center w-10 sm:w-8 h-8 sm:h-7 rounded-md transition-all cursor-pointer ${
+                          className={`flex items-center justify-center w-8 h-7 rounded-md transition-all cursor-pointer ${
                             gridDensity === "double"
                               ? "bg-m3-primary text-m3-on-primary shadow-xs"
                               : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
@@ -1902,7 +1775,7 @@ export const DashboardView = React.memo(
                         </button>
                         <button
                           onClick={() => setGridDensity("list")}
-                          className={`flex items-center justify-center w-10 sm:w-8 h-8 sm:h-7 rounded-md transition-all cursor-pointer ${
+                          className={`flex items-center justify-center w-8 h-7 rounded-md transition-all cursor-pointer ${
                             gridDensity === "list"
                               ? "bg-m3-primary text-m3-on-primary shadow-xs"
                               : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
@@ -1914,19 +1787,16 @@ export const DashboardView = React.memo(
                       </div>
 
                       {/* Active Sort Label on big screens */}
-                      <div className="hidden lg:flex items-center gap-1 text-[11px] text-m3-on-surface-variant shrink-0 select-none">
-                        <span className="font-semibold text-m3-outline">
-                          Sorted:
-                        </span>
-                        <span className="font-bold text-m3-primary bg-m3-primary-container/10 px-1.5 py-0.5 rounded-md">
+                      <div className="hidden xl:flex items-center gap-1 text-[11px] text-m3-on-surface-variant shrink-0 select-none">
+                        <span className="font-semibold text-m3-outline">Sorted:</span>
+                        <span className="font-bold text-m3-primary bg-m3-primary-container/10 px-1.5 py-0.5 rounded-md capitalize">
                           {sortBy === "savedAt" && "Date Saved"}
                           {sortBy === "creatorUsername" && "Creator"}
                           {sortBy === "mediaType" && "Post Type"}
                           {sortBy === "caption" && "Caption"}
                           {sortBy === "commentsCount" && "Engagement"}
                           {sortBy === "notesLength" && "Notes"}
-                          {sortBy === "tagsLength" && "Tags"} (
-                          {sortOrder === "desc" ? "Desc" : "Asc"})
+                          {sortBy === "tagsLength" && "Tags"} ({sortOrder})
                         </span>
                       </div>
                     </div>
@@ -1936,218 +1806,582 @@ export const DashboardView = React.memo(
             </div>
           </header>
 
+          {/* Collapsible Unified Curator Bar Panel */}
+          <AnimatePresence>
+            {isSidebarOpen && posts.length > 0 && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: "easeInOut" }}
+                className="border-b border-m3-outline-variant/40 bg-m3-surface-low shadow-xs overflow-hidden z-10 shrink-0"
+              >
+                <div className="px-4 md:px-6 py-4 flex flex-col gap-4 select-none">
+                  {/* Row 1: Format Quick Filters */}
+                  <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between border-b border-m3-outline-variant/10 pb-3">
+                    <span className="text-xs font-bold text-m3-on-surface-variant flex items-center gap-1.5 pl-1">
+                      <Layers size={13} />
+                      <span>Filter by Media Format</span>
+                    </span>
+
+                    {/* Quick Media Format Selector Chips */}
+                    <div className="flex items-center gap-1 bg-m3-surface border border-m3-outline-variant/20 rounded-xl p-1 shadow-glass-sm overflow-x-auto shrink-0 scrollbar-none">
+                      {[
+                        { id: "all", label: "All Formats" },
+                        { id: "photo", label: "Photos" },
+                        { id: "video", label: "Videos" },
+                        { id: "carousel", label: "Carousels" },
+                        { id: "thread", label: "Threads" },
+                      ].map((fmt) => {
+                        const isSel = filterMediaType === fmt.id;
+                        return (
+                          <button
+                            key={fmt.id}
+                            onClick={() => setFilterMediaType(fmt.id)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${
+                              isSel
+                                ? "bg-m3-primary text-m3-on-primary font-bold shadow-xs"
+                                : "text-m3-on-surface-variant hover:bg-m3-surface-variant/30"
+                            }`}
+                          >
+                            {fmt.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Row 2: Bento Columns Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-3.5 border-t border-m3-outline-variant/10">
+                    {/* Card 1: Sort Settings */}
+                    <div className="flex flex-col gap-2 bg-m3-surface-container/35 p-3 rounded-2xl border border-m3-outline-variant/10">
+                      <span className="text-[10px] font-bold text-m3-outline uppercase tracking-wider pl-1 flex items-center gap-1.5">
+                        <SlidersHorizontal size={11} />
+                        <span>Sort Settings</span>
+                      </span>
+                      <div className="flex gap-2">
+                        <select
+                          value={sortBy}
+                          onChange={(e) => setSortBy(e.target.value)}
+                          className="flex-1 px-2.5 py-1.5 text-xs bg-m3-surface text-m3-on-surface border border-m3-outline-variant/30 rounded-xl focus:border-m3-primary focus:outline-none cursor-pointer"
+                        >
+                          {sortOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
+                          className="px-2.5 bg-m3-surface border border-m3-outline-variant/30 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface transition-colors cursor-pointer flex items-center justify-center"
+                          title={sortOrder === "desc" ? "Sort Descending" : "Sort Ascending"}
+                        >
+                          {sortOrder === "desc" ? (
+                            <ChevronDown size={14} className="stroke-[2.5]" />
+                          ) : (
+                            <ChevronUp size={14} className="stroke-[2.5]" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Card 2: Saved Period Range */}
+                    <div className="flex flex-col gap-2 bg-m3-surface-container/35 p-3 rounded-2xl border border-m3-outline-variant/10">
+                      <span className="text-[10px] font-bold text-m3-outline uppercase tracking-wider pl-1 flex items-center gap-1.5">
+                        <Calendar size={11} />
+                        <span>Saved Period</span>
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="date"
+                          value={startDate}
+                          onChange={(e) => setStartDate(e.target.value)}
+                          className="px-2.5 py-1 text-[11px] text-m3-on-surface-variant bg-m3-surface rounded-xl border border-m3-outline-variant/30 focus:border-m3-primary focus:outline-none"
+                          placeholder="From"
+                        />
+                        <input
+                          type="date"
+                          value={endDate}
+                          onChange={(e) => setEndDate(e.target.value)}
+                          className="px-2.5 py-1 text-[11px] text-m3-on-surface-variant bg-m3-surface rounded-xl border border-m3-outline-variant/30 focus:border-m3-primary focus:outline-none"
+                          placeholder="To"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {[
+                          { id: "all", label: "All" },
+                          { id: "today", label: "Today" },
+                          { id: "7days", label: "7d" },
+                          { id: "30days", label: "30d" },
+                          { id: "thisyear", label: "Yr" },
+                        ].map((preset) => {
+                          let isActive = false;
+                          const todayStr = new Date().toISOString().split("T")[0];
+                          if (preset.id === "all" && !startDate && !endDate) isActive = true;
+                          else if (preset.id === "today" && startDate === todayStr && endDate === todayStr) isActive = true;
+                          else if (preset.id === "7days") {
+                            const sevenDaysAgo = new Date();
+                            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+                            const sevenStr = sevenDaysAgo.toISOString().split("T")[0];
+                            if (startDate === sevenStr && endDate === todayStr) isActive = true;
+                          } else if (preset.id === "30days") {
+                            const thirtyDaysAgo = new Date();
+                            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+                            const thirtyStr = thirtyDaysAgo.toISOString().split("T")[0];
+                            if (startDate === thirtyStr && endDate === todayStr) isActive = true;
+                          } else if (preset.id === "thisyear") {
+                            const yrStart = new Date(new Date().getFullYear(), 0, 1).toISOString().split("T")[0];
+                            if (startDate === yrStart && endDate === todayStr) isActive = true;
+                          }
+                          return (
+                            <button
+                              key={preset.id}
+                              onClick={() => handleDatePreset(preset.id as any)}
+                              className={`px-2 py-0.5 rounded-lg text-[9px] font-bold border transition-all cursor-pointer ${
+                                isActive
+                                  ? "bg-m3-primary/15 border-m3-primary/30 text-m3-primary"
+                                  : "bg-m3-surface border-m3-outline-variant/20 text-m3-on-surface-variant hover:bg-m3-surface-variant/15"
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Card 3: Refined Flags */}
+                    <div className="flex flex-col gap-2 bg-m3-surface-container/35 p-3 rounded-2xl border border-m3-outline-variant/10">
+                      <span className="text-[10px] font-bold text-m3-outline uppercase tracking-wider pl-1 flex items-center gap-1.5">
+                        <Sparkles size={11} className="text-m3-primary" />
+                        <span>Refined Flags</span>
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => setFilterFavoriteOnly(!filterFavoriteOnly)}
+                          className={`px-2 py-1 border rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                            filterFavoriteOnly
+                              ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container shadow-xs"
+                              : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/30"
+                          }`}
+                        >
+                          <Heart size={10} fill={filterFavoriteOnly ? "currentColor" : "none"} />
+                          <span>Starred</span>
+                        </button>
+
+                        <button
+                          onClick={() => setFilterHasNotes(!filterHasNotes)}
+                          className={`px-2 py-1 border rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                            filterHasNotes
+                              ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container shadow-xs"
+                              : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/30"
+                          }`}
+                        >
+                          <BookOpen size={10} />
+                          <span>Notes</span>
+                        </button>
+
+                        <button
+                          onClick={() => setFilterHasLocation(!filterHasLocation)}
+                          className={`px-2 py-1 border rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                            filterHasLocation
+                              ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container shadow-xs"
+                              : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/30"
+                          }`}
+                        >
+                          <Compass size={10} />
+                          <span>Location</span>
+                        </button>
+
+                        <button
+                          onClick={() => setFilterHasHashtags(!filterHasHashtags)}
+                          className={`px-2 py-1 border rounded-xl text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer ${
+                            filterHasHashtags
+                              ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container shadow-xs"
+                              : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/30"
+                          }`}
+                        >
+                          <Hash size={10} />
+                          <span>Hashtag</span>
+                        </button>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5 mt-1 border-t border-m3-outline-variant/20 pt-2 w-full">
+                        <span className="text-[9px] font-mono tracking-wider text-m3-outline uppercase flex items-center gap-1 pl-1">
+                          <Eye size={9} className="text-m3-primary" />
+                          <span>Post Visibility {hiddenCount > 0 && <span className="text-red-500 font-extrabold font-sans normal-case animate-pulse ml-1">• {hiddenCount} Hidden</span>}</span>
+                        </span>
+                        <div className="grid grid-cols-3 gap-1 bg-m3-surface-variant/25 p-0.5 rounded-lg border border-m3-outline-variant/10">
+                          {(["all", "visible", "hidden"] as const).map((mode) => {
+                            const isActive = visibilityFilter === mode;
+                            let label = "All";
+                            if (mode === "visible") label = "Visible";
+                            if (mode === "hidden") label = "Hidden";
+                            return (
+                              <button
+                                key={mode}
+                                onClick={() => setVisibilityFilter(mode)}
+                                className={`py-0.5 rounded-md text-[9px] font-bold transition-all cursor-pointer text-center ${
+                                  isActive
+                                    ? "bg-m3-surface text-m3-on-surface shadow-xs font-extrabold border border-m3-outline-variant/25"
+                                    : "text-m3-on-surface-variant hover:bg-m3-surface-variant/15 font-medium border border-transparent"
+                                }`}
+                                title={
+                                  mode === "all"
+                                    ? "Show all posts"
+                                    : mode === "visible"
+                                    ? "Show visible posts only"
+                                    : "Show hidden posts only"
+                                }
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card 4: Tags & Collections Lists */}
+                    <div className="flex flex-col gap-2 bg-m3-surface-container/35 p-3 rounded-2xl border border-m3-outline-variant/10 max-h-[140px] overflow-hidden">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-m3-outline uppercase tracking-wider pl-1 shrink-0">
+                        <span className="flex items-center gap-1">
+                          <Tag size={10} />
+                          <span>Tags &amp; Colls</span>
+                        </span>
+                        {allTags.length > 3 && (
+                          <input
+                            placeholder="Filter..."
+                            value={tagSearchQuery}
+                            onChange={(e) => setTagSearchQuery(e.target.value)}
+                            className="px-1.5 py-0.5 text-[9px] w-20 border border-m3-outline-variant/20 bg-m3-surface text-m3-on-surface rounded-md focus:outline-none"
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1 overflow-y-auto space-y-1.5 pr-0.5 scrollbar-thin">
+                        <div className="flex flex-wrap gap-1">
+                          {filteredTagsInSidebar.slice(0, 15).map((tag) => {
+                            const isSelected = selectedTags.includes(tag);
+                            return (
+                              <button
+                                key={tag}
+                                onClick={() => toggleTagFilter(tag)}
+                                className={`px-2 py-0.5 rounded-lg text-[9px] font-semibold border flex items-center gap-0.5 transition-all cursor-pointer ${
+                                  isSelected
+                                    ? "bg-m3-primary-container border-m3-primary text-m3-on-primary-container font-bold"
+                                    : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                                }`}
+                              >
+                                <span>#{tag}</span>
+                              </button>
+                            );
+                          })}
+                          {filteredCollectionsInSidebar.slice(0, 10).map((col) => {
+                            const isSelected = selectedCollections.includes(col);
+                            return (
+                              <button
+                                key={col}
+                                onClick={() => toggleCollectionFilter(col)}
+                                className={`px-2 py-0.5 rounded-lg text-[9px] font-semibold border flex items-center gap-1 transition-all cursor-pointer ${
+                                  isSelected
+                                    ? "bg-m3-secondary-container text-m3-on-secondary-container border-m3-secondary font-bold"
+                                    : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                                }`}
+                              >
+                                <Folder size={8} />
+                                <span className="truncate max-w-[50px]">{col}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Smart Rules Management shortcut trigger */}
+                  <div className="flex justify-between items-center border-t border-m3-outline-variant/10 pt-3 text-[11px] shrink-0">
+                    <span className="text-m3-outline flex items-center gap-1">
+                      <Sparkles size={11} className="text-m3-primary animate-pulse" />
+                      <span>Configure automated curation &amp; smart categorizer rule set:</span>
+                    </span>
+                    <SmartRulesManager />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           {/* Active Filters Toolbar */}
           {posts.length > 0 && hasActiveFilters && (
-            <div className="px-6 py-2 bg-m3-surface-container-lowest/40 border-b border-m3-outline-variant/10 flex flex-wrap items-center gap-1.5 text-xs shrink-0 select-none">
-              <span className="text-[10px] font-bold text-m3-outline uppercase tracking-wider">
-                Active Search Filters:
-              </span>
-
-              {searchQuery && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface text-[11px] font-medium">
-                  <span className="text-m3-outline text-[10px]">Query:</span>
-                  <span>"{searchQuery}"</span>
-                  <button
-                    onClick={() => setSearchQuery("")}
-                    className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              )}
-
-              {selectedTags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container border border-m3-primary/20 text-[11px] font-semibold"
-                >
-                  <span>#{tag}</span>
-                  <button
-                    onClick={() => toggleTagFilter(tag)}
-                    className="p-1.5 sm:p-0.5 -mr-1 text-m3-on-primary-container/60 hover:text-red-500 rounded-full transition-colors cursor-pointer"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              ))}
-
-              {selectedCollections.map((col) => (
-                <span
-                  key={col}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-secondary-container text-m3-on-secondary-container border border-m3-secondary/20 text-[11px] font-semibold"
-                >
-                  <Folder size={10} className="text-m3-secondary" />
-                  <span>{col}</span>
-                  <button
-                    onClick={() => toggleCollectionFilter(col)}
-                    className="p-1.5 sm:p-0.5 -mr-1 text-m3-on-secondary-container/60 hover:text-red-500 rounded-full transition-colors cursor-pointer"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              ))}
-
-              {(startDate || endDate) && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/30 text-m3-on-surface text-[11px] font-medium">
-                  <Calendar size={10} className="text-m3-outline" />
-                  <span>
-                    {startDate && endDate
-                      ? `${startDate} to ${endDate}`
-                      : startDate
-                        ? `Since ${startDate}`
-                        : `Until ${endDate}`}
-                  </span>
-                  <button
-                    onClick={() => {
-                      setStartDate("");
-                      setEndDate("");
-                    }}
-                    className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              )}
-
-              {filterMediaType !== "all" && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface capitalize text-[11px] font-medium">
-                  <span className="text-m3-outline text-[10px]">Format:</span>
-                  <span>{filterMediaType}</span>
-                  <button
-                    onClick={() => setFilterMediaType("all")}
-                    className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              )}
-
-              {filterFavoriteOnly && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-tertiary-container text-m3-on-tertiary-container border border-m3-tertiary-container/30 text-[11px] font-semibold">
-                  <Heart
-                    size={10}
-                    fill="currentColor"
-                    className="text-m3-tertiary"
-                  />
-                  <span>Starred Only</span>
-                  <button
-                    onClick={() => setFilterFavoriteOnly(false)}
-                    className="p-1.5 sm:p-0.5 -mr-1 text-m3-on-tertiary-container/60 hover:text-red-500 rounded-full transition-colors cursor-pointer"
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              )}
-
-              <button
-                onClick={clearAllFilters}
-                className="text-[10px] text-m3-primary hover:text-m3-primary/80 font-bold uppercase tracking-wider ml-auto hover:underline cursor-pointer p-2 sm:p-0 -m-2 sm:m-0"
+            <LayoutGroup id="active-filters-bar">
+              <motion.div
+                layout
+                className="px-6 py-2 bg-m3-surface-container-lowest/40 border-b border-m3-outline-variant/10 flex flex-wrap items-center gap-1.5 text-xs shrink-0 select-none overflow-hidden"
               >
-                Clear All
-              </button>
-            </div>
-          )}
+                <motion.span
+                  layout
+                  key="title-label"
+                  className="text-[10px] font-bold text-m3-outline uppercase tracking-wider mr-1"
+                >
+                  Active Search Filters:
+                </motion.span>
 
-          {/* Scraper Health & Progress Dashboard - Compact single-row banner */}
-          {workerStats.total > 0 &&
-            (workerStats.pending > 0 ||
-              workerStats.failed > 0 ||
-              isDownloading ||
-              throttleStatus.throttled) && (
-              <div className="bg-m3-surface-low border-b border-m3-outline-variant/10 px-4 md:px-6 py-2 flex flex-wrap md:flex-nowrap items-center justify-between gap-3 shrink-0 transition-all shadow-xs animate-fade-in text-xs select-none">
-                {/* Status & Stats */}
-                <div className="flex items-center gap-2 max-w-full">
-                  {throttleStatus.throttled ? (
-                    <AlertCircle
-                      size={14}
-                      className="text-m3-primary shrink-0 animate-pulse"
-                    />
-                  ) : isDownloading ? (
-                    <RefreshCw
-                      size={14}
-                      className="text-m3-primary animate-spin shrink-0"
-                    />
-                  ) : workerStats.failed > 0 ? (
-                    <AlertCircle
-                      size={14}
-                      className="text-m3-primary shrink-0"
-                    />
-                  ) : (
-                    <Check size={14} className="text-m3-primary shrink-0" />
+                <AnimatePresence mode="popLayout">
+                  {searchQuery && (
+                    <motion.span
+                      layout
+                      key="query"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface text-[11px] font-medium"
+                    >
+                      <span className="text-m3-outline text-[10px]">Query:</span>
+                      <span>"{searchQuery}"</span>
+                      <button
+                        onClick={() => setSearchQuery("")}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
                   )}
 
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="font-bold text-m3-on-surface">
-                      {throttleStatus.throttled
-                        ? "Scraper Rate Limited"
-                        : isDownloading
-                          ? "Scraper Running"
-                          : "Scraper Idle"}
-                    </span>
-                    <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-m3-surface-variant text-m3-on-surface-variant shrink-0">
-                      {throttleStatus.throttled
-                        ? "COOLDOWN"
-                        : isDownloading
-                          ? "ACTIVE"
-                          : "STANDBY"}
-                    </span>
-                    <span className="text-m3-on-surface-variant text-[11px] shrink-0">
-                      (Scraped: <strong>{workerStats.success}</strong> &bull;
-                      Pending: <strong>{workerStats.pending}</strong> &bull;
-                      Failed: <strong>{workerStats.failed}</strong>)
-                    </span>
-                  </div>
-                </div>
+                  {creatorFilter && (
+                    <motion.span
+                      layout
+                      key="creator"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface text-[11px] font-medium"
+                    >
+                      <span className="text-m3-outline text-[10px]">User:</span>
+                      <span>@{creatorFilter}</span>
+                      <button
+                        onClick={() => setCreatorFilter("")}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  )}
 
-                {/* Progress & Actions */}
-                <div className="flex items-center gap-3 w-full md:w-auto shrink-0 justify-end flex-wrap md:flex-nowrap">
-                  {throttleStatus.throttled ? (
-                    <div className="flex items-center gap-2 bg-m3-primary/50/10 border border-m3-primary/100/10 px-2 py-0.5 rounded-md text-[11px] text-m3-primary dark:text-m3-primary">
+                  {selectedTags.map((tag) => (
+                    <motion.span
+                      layout
+                      key={`tag-${tag}`}
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-m3-primary-container text-m3-on-primary-container border border-m3-primary/20 text-[11px] font-semibold"
+                    >
+                      <span>#{tag}</span>
+                      <button
+                        onClick={() => toggleTagFilter(tag)}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-on-primary-container/60 hover:text-red-500 rounded-full transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  ))}
+
+                  {selectedCollections.map((col) => (
+                    <motion.span
+                      layout
+                      key={`col-${col}`}
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-secondary-container text-m3-on-secondary-container border border-m3-secondary/20 text-[11px] font-semibold"
+                    >
+                      <Folder size={10} className="text-m3-secondary" />
+                      <span>{col}</span>
+                      <button
+                        onClick={() => toggleCollectionFilter(col)}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-on-secondary-container/60 hover:text-red-500 rounded-full transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  ))}
+
+                  {(startDate || endDate) && (
+                    <motion.span
+                      layout
+                      key="dates"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/30 text-m3-on-surface text-[11px] font-medium"
+                    >
+                      <Calendar size={10} className="text-m3-outline" />
                       <span>
-                        Pausing queries. Resuming in{" "}
-                        <strong>{throttleStatus.remaining}s</strong>
+                        {startDate && endDate
+                          ? `${startDate} to ${endDate}`
+                          : startDate
+                            ? `Since ${startDate}`
+                            : `Until ${endDate}`}
                       </span>
                       <button
-                        onClick={() => retryFailedThumbnails()}
-                        className="px-1.5 py-0.5 bg-m3-primary/50/20 hover:bg-m3-primary/50/30 rounded text-[9px] font-bold uppercase transition-colors cursor-pointer"
-                      >
-                        Bypass
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="w-20 md:w-32 h-1 bg-m3-surface-container rounded-full overflow-hidden border border-m3-outline-variant/10 shrink-0">
-                      <div
-                        className={`h-full transition-all duration-500 rounded-full ${
-                          workerStats.failed > 0 && workerStats.pending === 0
-                            ? "bg-m3-primary/50"
-                            : "bg-m3-primary"
-                        }`}
-                        style={{
-                          width: `${workerStats.total > 0 ? (workerStats.success / workerStats.total) * 100 : 0}%`,
+                        onClick={() => {
+                          setStartDate("");
+                          setEndDate("");
                         }}
-                      />
-                    </div>
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
                   )}
 
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {workerStats.failed > 0 && (
+                  {filterMediaType !== "all" && (
+                    <motion.span
+                      layout
+                      key="mediaType"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface capitalize text-[11px] font-medium"
+                    >
+                      <span className="text-m3-outline text-[10px]">Format:</span>
+                      <span>{filterMediaType}</span>
                       <button
-                        onClick={() => retryFailedThumbnails()}
-                        className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold text-m3-primary bg-m3-primary/50/10 hover:bg-m3-primary/50/20 rounded-md transition-all cursor-pointer"
+                        onClick={() => setFilterMediaType("all")}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
                       >
-                        <RefreshCw size={9} />
-                        <span>Retry Failed</span>
+                        <X size={10} />
                       </button>
-                    )}
-                    {isDownloading && !throttleStatus.throttled && (
-                      <span className="text-[9px] uppercase tracking-wider font-bold text-m3-primary bg-m3-primary/10 px-1.5 py-0.5 rounded-md animate-pulse shrink-0">
-                        Downloading...
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            )}
+                    </motion.span>
+                  )}
+
+                  {filterFavoriteOnly && (
+                    <motion.span
+                      layout
+                      key="favorite"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-tertiary-container text-m3-on-tertiary-container border border-m3-tertiary-container/30 text-[11px] font-semibold"
+                    >
+                      <Heart
+                        size={10}
+                        fill="currentColor"
+                        className="text-m3-tertiary"
+                      />
+                      <span>Starred Only</span>
+                      <button
+                        onClick={() => setFilterFavoriteOnly(false)}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-on-tertiary-container/60 hover:text-red-500 rounded-full transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  )}
+
+                  {filterHasNotes && (
+                    <motion.span
+                      layout
+                      key="hasNotes"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface text-[11px] font-medium"
+                    >
+                      <MessageCircle size={10} className="text-m3-outline" />
+                      <span>Has Notes</span>
+                      <button
+                        onClick={() => setFilterHasNotes(false)}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  )}
+
+                  {filterHasLocation && (
+                    <motion.span
+                      layout
+                      key="hasLocation"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface text-[11px] font-medium"
+                    >
+                      <MapPin size={10} className="text-m3-outline" />
+                      <span>Has Location</span>
+                      <button
+                        onClick={() => setFilterHasLocation(false)}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  )}
+
+                  {filterHasHashtags && (
+                    <motion.span
+                      layout
+                      key="hasHashtags"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-surface border border-m3-outline-variant/20 text-m3-on-surface text-[11px] font-medium"
+                    >
+                      <Hash size={10} className="text-m3-outline" />
+                      <span>Has Hashtags</span>
+                      <button
+                        onClick={() => setFilterHasHashtags(false)}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-outline hover:text-red-500 rounded-md transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  )}
+
+                  {visibilityFilter !== "visible" && (
+                    <motion.span
+                      layout
+                      key="visibilityFilterChip"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.85 }}
+                      transition={{ type: "spring", stiffness: 450, damping: 28 }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-m3-primary/10 text-m3-primary border border-m3-primary/20 text-[11px] font-semibold"
+                    >
+                      <Eye size={10} className="text-m3-primary" />
+                      <span>{visibilityFilter === "hidden" ? "Hidden Only" : "All Posts"}</span>
+                      <button
+                        onClick={() => setVisibilityFilter("visible")}
+                        className="p-1.5 sm:p-0.5 -mr-1 text-m3-primary/70 hover:text-m3-primary hover:bg-m3-primary/10 rounded-full transition-colors cursor-pointer"
+                      >
+                        <X size={10} />
+                      </button>
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+
+                <motion.button
+                  layout
+                  key="clear-all-button"
+                  onClick={clearAllFilters}
+                  className="text-[10px] text-m3-primary hover:text-m3-primary/80 font-bold uppercase tracking-wider ml-auto hover:underline cursor-pointer p-2 sm:p-0 -m-2 sm:m-0"
+                >
+                  Clear All
+                </motion.button>
+              </motion.div>
+            </LayoutGroup>
+          )}
 
           {/* Dashboard Catalog Content Panel */}
           <div
@@ -2156,7 +2390,7 @@ export const DashboardView = React.memo(
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
-            className="flex-1 overflow-y-auto p-4 md:p-6 bg-m3-surface/40 relative"
+            className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-6 bg-m3-surface/40 relative"
           >
             {/* Pull to Refresh Dynamic Indicator Overlay */}
             {(pullDistance > 0 || refreshState === "refreshing") && (
@@ -2206,11 +2440,12 @@ export const DashboardView = React.memo(
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
+                  style={gridDensity !== "list" ? { gridTemplateColumns: `repeat(${masonryColumns}, minmax(0, 1fr))` } : undefined}
                   className={
                     gridDensity === "single"
-                      ? "grid grid-cols-1 gap-8 max-w-xl mx-auto w-full"
+                      ? "grid gap-8 max-w-7xl mx-auto w-full"
                       : gridDensity === "double"
-                        ? "grid grid-cols-2 gap-4 w-full"
+                        ? "grid gap-4 w-full"
                         : "flex flex-col divide-y divide-m3-outline-variant/15 max-w-4xl mx-auto w-full bg-m3-surface border border-m3-outline-variant/40 shadow-sm rounded-xl overflow-hidden shadow-sm"
                   }
                 >
@@ -2238,91 +2473,63 @@ export const DashboardView = React.memo(
                   initial={{ opacity: 0, y: 15 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -15 }}
-                  className="max-w-3xl mx-auto py-8 md:py-16 flex flex-col gap-10 items-center justify-center text-center"
+                  className="max-w-3xl mx-auto py-12 md:py-20 flex flex-col gap-8 items-center justify-center text-center"
                 >
+                  <motion.div
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ delay: 0.1, duration: 0.4 }}
+                  >
+                    <EmptyLibraryIllustration />
+                  </motion.div>
+
                   <div className="flex flex-col gap-3 max-w-xl">
-                    <div className="w-16 h-16 rounded-full bg-m3-primary-container text-m3-on-primary-container flex items-center justify-center mx-auto shadow-md">
-                      <Database size={28} className="animate-pulse" />
-                    </div>
                     <h1 className="text-3xl font-extrabold font-display text-m3-on-surface tracking-tight">
                       Welcome to Instasorter
                     </h1>
+                    <p className="text-sm text-m3-on-surface-variant/90 leading-relaxed mt-1">
+                      Your high-efficiency offline-first curator space is empty. Import your personal Instagram data export file (JSON/ZIP) to index, search, and sort your saved bookmarks offline.
+                    </p>
                   </div>
 
-                  {/* Two modern visual CTA pathways */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full mt-2">
-                    {/* CTA 1: Load Sample Space */}
-                    <motion.div
-                      whileHover={{ y: -4, scale: 1.01 }}
-                      whileTap={{ scale: 0.99 }}
-                      onClick={loadDemoData}
-                      className="p-6 md:p-8 bg-m3-primary-container/30 border border-m3-primary-container rounded-[28px] text-left cursor-pointer flex flex-col justify-between hover:shadow-lg transition-all relative overflow-hidden group min-h-[220px]"
-                    >
-                      <div className="absolute right-0 bottom-0 opacity-10 transform translate-x-4 translate-y-4 group-hover:scale-110 transition-transform">
-                        <Database size={160} />
-                      </div>
-
-                      <div className="flex flex-col gap-3 relative z-10">
-                        <div className="w-11 h-11 bg-m3-primary-container rounded-xl flex items-center justify-center text-m3-on-primary-container shadow-xs">
-                          <Database size={20} />
-                        </div>
-                        <h3 className="text-lg font-bold font-display text-m3-on-surface-variant">
-                          Explore with Demo Space
-                        </h3>
-                        <p className="text-xs text-m3-on-surface-variant/95 leading-relaxed">
-                          Instantly seed your workspace with beautiful Unsplash
-                          photography mockups, custom tags, and collections to
-                          explore features.
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={demoLoading}
-                        className="mt-6 py-2.5 px-5 bg-m3-primary text-m3-on-primary rounded-full font-bold text-xs shadow-sm hover:shadow-md flex items-center justify-center gap-1.5 relative z-10"
-                      >
-                        {demoLoading
-                          ? "Seeding data..."
-                          : "Load Sample Catalog"}
-                        <Sparkles size={13} />
-                      </button>
-                    </motion.div>
-
-                    {/* CTA 2: Import Archive file */}
+                  <div className="flex w-full justify-center mt-4">
                     {onNavigate && (
                       <motion.div
-                        whileHover={{ y: -4, scale: 1.01 }}
-                        whileTap={{ scale: 0.99 }}
+                        whileHover={{ y: -3, scale: 1.01 }}
+                        whileTap={{ scale: 0.98 }}
                         onClick={() =>
                           usePostStore.getState().setIsImportModalOpen(true)
                         }
-                        className="p-6 md:p-8 bg-m3-secondary-container/30 border border-m3-secondary-container rounded-[28px] text-left cursor-pointer flex flex-col justify-between hover:shadow-lg transition-all relative overflow-hidden group min-h-[220px]"
+                        className="w-full bg-m3-surface-low border border-m3-outline-variant/30 rounded-[24px] p-6 text-left cursor-pointer flex flex-col justify-between hover:shadow-lg transition-all relative overflow-hidden group min-h-[180px] max-w-md"
                       >
-                        <div className="absolute right-0 bottom-0 opacity-10 transform translate-x-4 translate-y-4 group-hover:scale-110 transition-transform">
-                          <Upload size={160} />
+                        <div className="absolute right-0 bottom-0 opacity-5 transform translate-x-4 translate-y-4 group-hover:scale-105 transition-transform text-m3-primary">
+                          <Upload size={140} />
                         </div>
 
-                        <div className="flex flex-col gap-3 relative z-10">
-                          <div className="w-11 h-11 bg-m3-secondary-container rounded-xl flex items-center justify-center text-m3-on-secondary-container shadow-xs">
-                            <Upload size={20} />
+                        <div className="flex flex-col gap-2 relative z-10">
+                          <div className="w-10 h-10 bg-m3-secondary-container rounded-xl flex items-center justify-center text-m3-on-secondary-container shadow-xs">
+                            <Upload size={18} />
                           </div>
-                          <h3 className="text-lg font-bold font-display text-m3-on-surface-variant">
+                          <h3 className="text-base font-bold font-display text-m3-on-surface">
                             Import Personal Data
                           </h3>
-                          <p className="text-xs text-m3-on-surface-variant/95 leading-relaxed">
-                            Directly import your exported Meta Instagram JSON
-                            dataset or full ZIP archives to parse your real
-                            saved bookmarks offline.
+                          <p className="text-xs text-m3-on-surface-variant/90 leading-relaxed">
+                            Supports exported Meta Instagram JSON datasets or ZIP archives offline.
                           </p>
                         </div>
 
-                        <button
-                          type="button"
-                          className="mt-6 py-2.5 px-5 bg-m3-secondary text-m3-on-secondary-container rounded-full font-bold text-xs shadow-sm hover:shadow-md flex items-center justify-center gap-1.5 relative z-10"
-                        >
-                          Upload Export file
-                          <Upload size={13} />
-                        </button>
+                        <div className="mt-6 flex items-center justify-between relative z-10">
+                          <span className="text-xs font-bold text-m3-primary">
+                            Open Importer
+                          </span>
+                          <button
+                            type="button"
+                            className="py-2 px-4 bg-m3-primary text-m3-on-primary rounded-full font-bold text-xs shadow-xs hover:shadow-md transition-all flex items-center justify-center gap-1.5"
+                          >
+                            Upload File
+                            <Upload size={12} />
+                          </button>
+                        </div>
                       </motion.div>
                     )}
                   </div>
@@ -2333,26 +2540,31 @@ export const DashboardView = React.memo(
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="h-full flex flex-col items-center justify-center text-m3-outline gap-4 py-24 text-center max-w-sm mx-auto"
+                  className="h-full flex flex-col items-center justify-center gap-6 py-16 text-center max-w-sm mx-auto"
                 >
-                  <div className="w-16 h-16 rounded-full bg-m3-surface-container flex items-center justify-center text-m3-outline/80 shadow-inner">
-                    <EyeOff size={28} className="stroke-[1.5]" />
-                  </div>
-                  <div>
-                    <p className="text-base font-bold text-m3-on-surface">
-                      No matches found
+                  <motion.div
+                    initial={{ scale: 0.9, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ delay: 0.1, duration: 0.4 }}
+                  >
+                    <EmptyFilterIllustration />
+                  </motion.div>
+                  
+                  <div className="space-y-2">
+                    <p className="text-lg font-bold font-display text-m3-on-surface">
+                      No matching posts
                     </p>
-                    <p className="text-xs text-m3-on-surface-variant/80 mt-1.5 leading-relaxed">
-                      Try clearing search strings, active collections, or date
-                      selectors to expand results.
+                    <p className="text-xs text-m3-on-surface-variant/80 leading-relaxed max-w-xs mx-auto">
+                      Try clearing search strings, active collections, folder structures, or tag selections to expand your curation feed.
                     </p>
                   </div>
+                  
                   {hasActiveFilters && (
                     <button
                       onClick={clearAllFilters}
-                      className="mt-2 px-5 py-2.5 bg-m3-primary text-m3-on-primary font-bold text-xs rounded-full shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer"
+                      className="mt-2 px-5 py-2.5 bg-m3-primary text-m3-on-primary font-bold text-xs rounded-full shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 mx-auto"
                     >
-                      Clear All Filters
+                      <span>Clear All Filters</span>
                     </button>
                   )}
                 </motion.div>
@@ -2361,221 +2573,245 @@ export const DashboardView = React.memo(
                   {/* <DashboardAnalytics posts={posts} /> */}
 
                   {/* CONTENT VIEWS */}
-                  <motion.div
-                    layout
-                    initial="hidden"
-                    animate="visible"
-                    variants={{
-                      visible: { transition: { staggerChildren: 0.03 } },
-                    }}
-                    className="w-full"
-                  >
-                    {gridDensity === "list" ? (
-                      <Virtuoso
-                        customScrollParent={scrollElement || undefined}
-                        data={chunkArray(visiblePosts, 1)}
-                        itemContent={(index, row) => {
-                          if (gridDensity === "list") {
-                            return (
-                              <div className="flex flex-col w-full max-w-4xl mx-auto bg-m3-surface border-x border-b border-m3-outline-variant/40 first:border-t first:rounded-t-xl last:rounded-b-xl shadow-sm">
-                                {row.map((post) => {
-                                  const fullPost = post;
-                                  const isVideo =
-                                    fullPost.mediaType === "video" ||
-                                    (fullPost.postUrl &&
-                                      fullPost.postUrl.includes("/reel/"));
-                                  const formattedDate = fullPost.savedAt
-                                    ? new Date(fullPost.savedAt).toLocaleDateString(
-                                        undefined,
-                                        {
-                                          month: "short",
-                                          day: "numeric",
-                                          year: "numeric",
-                                        },
-                                      )
-                                    : "";
-                                  const isKeyboardFocused =
-                                    keyboardFocusedId === post.id;
-                                  return (
-                                    <div
-                                      key={post.id}
-                                      id={`post-card-container-${post.id}`}
-                                    >
+                  <LayoutGroup id="dashboard-post-grid">
+                    <motion.div
+                      layout
+                      initial="hidden"
+                      animate="visible"
+                      variants={{
+                        visible: { transition: { staggerChildren: 0.03 } },
+                      }}
+                      className="w-full"
+                    >
+                      {gridDensity === "list" ? (
+                        <Virtuoso
+                          customScrollParent={scrollElement || undefined}
+                          data={chunkArray(visiblePosts, 1)}
+                          itemContent={(index, row) => {
+                            if (gridDensity === "list") {
+                              return (
+                                <div className="flex flex-col w-full max-w-4xl mx-auto bg-m3-surface border-x border-b border-m3-outline-variant/40 first:border-t first:rounded-t-xl last:rounded-b-xl shadow-sm">
+                                  {row.map((post) => {
+                                    const fullPost = post;
+                                    const isVideo =
+                                      fullPost.mediaType === "video" ||
+                                      (fullPost.postUrl &&
+                                        fullPost.postUrl.includes("/reel/"));
+                                    const formattedDate = fullPost.savedAt
+                                      ? new Date(fullPost.savedAt).toLocaleDateString(
+                                          undefined,
+                                          {
+                                            month: "short",
+                                            day: "numeric",
+                                            year: "numeric",
+                                          },
+                                        )
+                                      : "";
+                                    const isKeyboardFocused =
+                                      keyboardFocusedId === post.id;
+                                    return (
                                       <motion.div
-                                        onClick={(e) => toggleSelect(post.id, e)}
+                                        key={`${filterKey}-${post.id}`}
+                                        id={`post-card-container-${post.id}`}
+                                        initial={{ opacity: 0, y: 12 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{
+                                          type: "spring",
+                                          stiffness: 260,
+                                          damping: 24,
+                                          delay: Math.min(index * 0.012, 0.25),
+                                        }}
+                                      >
+                                        <motion.div
+                                          layoutId={`post-card-${post.id}`}
+                                          onClick={() => setDetailPost(post)}
+                                          onMouseEnter={() =>
+                                            setKeyboardFocusedId(post.id)
+                                          }
+                                          whileHover={{
+                                            y: -3,
+                                            scale: 1.012,
+                                            boxShadow:
+                                              "0 10px 20px -5px rgba(0, 0, 0, 0.05), 0 8px 8px -6px rgba(0, 0, 0, 0.05)",
+                                          }}
+                                          whileTap={{ scale: 0.992 }}
+                                          transition={{
+                                            type: "spring",
+                                            stiffness: 400,
+                                            damping: 22,
+                                          }}
+                                          className={`group flex items-center gap-3 sm:gap-4 p-2 sm:p-3 transition-all duration-300 cursor-pointer relative hover:scale-[1.01] hover:shadow-md hover:z-10 hover:bg-m3-surface rounded-xl ${
+                                            selectedPostIds.includes(post.id)
+                                              ? "bg-m3-primary-container/20"
+                                              : isKeyboardFocused
+                                                ? "bg-m3-primary-container/10"
+                                                : "bg-transparent"
+                                          }`}
+                                        >
+                                          {/* Checkbox for Select */}
+                                          <div
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              toggleSelect(post.id, e);
+                                            }}
+                                            className={`absolute top-2 left-2 z-10 w-5 h-5 rounded-md border flex items-center justify-center transition-all ${
+                                              selectedPostIds.includes(post.id)
+                                                ? "bg-m3-primary border-m3-primary text-m3-on-primary scale-100"
+                                                : "bg-black/35 border-white/40 text-transparent opacity-0 group-hover:opacity-100 scale-95"
+                                            }`}
+                                          >
+                                            <Check size={11} className="stroke-[3]" />
+                                          </div>
+                                          {/* Thumbnail */}
+                                          <div className="w-10 h-10 rounded-md overflow-hidden shrink-0 bg-m3-surface-low border border-m3-outline-variant/10 relative">
+                                            <InstagramImage
+                                              post={fullPost}
+                                              src={fullPost.thumbnailUrl || ""}
+                                              alt={fullPost.caption || "Thumbnail"}
+                                              className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                            />
+                                            {/* Overlay video indicator */}
+                                            {isVideo && (
+                                              <div className="absolute right-1 bottom-1 px-1 py-0.5 rounded-sm text-[8px] font-extrabold tracking-wider bg-black/55 text-white flex items-center gap-0.5 z-10">
+                                                <Film
+                                                  size={8}
+                                                  className="text-m3-primary"
+                                                />
+                                              </div>
+                                            )}
+                                          </div>
+                                          {/* Details */}
+                                          <div className="flex-1 min-w-0 pr-2">
+                                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                              <span
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  if (fullPost.creatorUsername)
+                                                    setCreatorFilter(
+                                                      fullPost.creatorUsername,
+                                                    );
+                                                }}
+                                                className="text-xs font-bold text-m3-primary hover:underline"
+                                              >
+                                                @{highlightText(fullPost.creatorUsername || "creator", "creator")}
+                                              </span>
+                                              {formattedDate && (
+                                                <>
+                                                  <span className="text-[10px] text-m3-outline-variant">
+                                                    •
+                                                  </span>
+                                                  <span className="text-[10px] font-medium text-m3-on-surface-variant/70 flex items-center gap-1">
+                                                    <Calendar size={10} />
+                                                    {formattedDate}
+                                                  </span>
+                                                </>
+                                              )}
+                                            </div>
+                                            <p className="text-[11px] sm:text-xs text-m3-on-surface font-semibold line-clamp-1 mt-0.5 leading-normal">
+                                              {fullPost.caption ? (
+                                                highlightText(fullPost.caption, "caption")
+                                              ) : (
+                                                <span className="italic font-normal text-m3-outline">
+                                                  No caption text
+                                                </span>
+                                              )}
+                                            </p>
+                                            {/* Tags display */}
+                                            {fullPost.tags &&
+                                              fullPost.tags.length > 0 && (
+                                                <div className="flex flex-wrap gap-1 mt-1 overflow-hidden max-h-4">
+                                                  {fullPost.tags
+                                                    .slice(0, 5)
+                                                    .map((tag) => (
+                                                      <span
+                                                        key={tag}
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          toggleTagFilter(tag);
+                                                        }}
+                                                        className="inline-flex items-center gap-0.5 px-2 py-0 rounded-sm text-[8px] font-bold bg-m3-surface-variant/35 text-m3-on-surface-variant hover:bg-m3-primary/10 hover:text-m3-primary transition-all shrink-0 cursor-pointer"
+                                                      >
+                                                        #{tag}
+                                                      </span>
+                                                    ))}
+                                                  {fullPost.tags.length > 5 && (
+                                                    <span className="text-[9px] font-extrabold text-m3-outline px-1 shrink-0">
+                                                      +{fullPost.tags.length - 5} more
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              )}
+                                          </div>
+                                          {/* Right Action Buttons */}
+                                          <div className="flex items-center gap-2 shrink-0">
+                                            {fullPost.mediaType === "carousel" && (
+                                              <div
+                                                className="w-6 h-6 rounded-md bg-m3-surface-variant/30 flex items-center justify-center text-m3-on-surface-variant/70"
+                                                title="Carousel post"
+                                              >
+                                                <Layers size={10} />
+                                              </div>
+                                            )}
+                                          </div>
+                                        </motion.div>
+                                      </motion.div>
+                                    );
+                                  })}
+                                </div>
+                              );
+                            }
+                            
+                            return null;
+                          }}
+                        />
+                      ) : (
+                        <motion.div layout="position" className="flex gap-4 w-full items-start justify-center">
+                          {Array.from({ length: masonryColumns }).map((_, colIdx) => (
+                            <motion.div layout="position" key={colIdx} className="flex-1 flex flex-col gap-4 min-w-0">
+                              {visiblePosts
+                                .filter((_, postIdx) => postIdx % masonryColumns === colIdx)
+                                .map((post) => {
+                                  const globalIdx = visiblePosts.findIndex((p) => p.id === post.id);
+                                  return (
+                                    <motion.div
+                                      key={`${filterKey}-${post.id}`}
+                                      layout
+                                      id={`post-card-container-${post.id}`}
+                                      className="w-full"
+                                      initial={{ opacity: 0, y: 12 }}
+                                      animate={{ opacity: 1, y: 0 }}
+                                      transition={{
+                                        type: "spring",
+                                        stiffness: 260,
+                                        damping: 24,
+                                        delay: Math.min((globalIdx >= 0 ? globalIdx : 0) * 0.012, 0.25),
+                                      }}
+                                    >
+                                      <MemoizedPostCard
+                                        post={post}
+                                        isSelected={selectedPostIds.includes(post.id)}
+                                        onToggleSelect={(e) => toggleSelect(post.id, e)}
+                                        onTagClick={toggleTagFilter}
+                                        onCreatorClick={setCreatorFilter}
+                                        onPeek={setPeekPost}
+                                        onClick={() => setDetailPost(post)}
+                                        creatorFilter={creatorFilter}
+                                        isKeyboardFocused={
+                                          keyboardFocusedId === post.id
+                                        }
                                         onMouseEnter={() =>
                                           setKeyboardFocusedId(post.id)
                                         }
-                                        whileHover={{
-                                          y: -3,
-                                          scale: 1.012,
-                                          boxShadow:
-                                            "0 10px 20px -5px rgba(0, 0, 0, 0.05), 0 8px 8px -6px rgba(0, 0, 0, 0.05)",
-                                        }}
-                                        whileTap={{ scale: 0.992 }}
-                                        transition={{
-                                          type: "spring",
-                                          stiffness: 400,
-                                          damping: 22,
-                                        }}
-                                        className={`group flex items-center gap-3 sm:gap-4 p-2 sm:p-3 transition-all duration-300 cursor-pointer relative hover:scale-[1.01] hover:shadow-md hover:z-10 hover:bg-m3-surface rounded-xl ${
-                                          selectedPostIds.includes(post.id)
-                                            ? "bg-m3-primary-container/20"
-                                            : isKeyboardFocused
-                                              ? "bg-m3-primary-container/10"
-                                              : "bg-transparent"
-                                        }`}
-                                      >
-                                        {/* Checkbox for Select */}
-                                        <div
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            toggleSelect(post.id, e);
-                                          }}
-                                          className={`absolute top-2 left-2 z-10 w-5 h-5 rounded-md border flex items-center justify-center transition-all ${
-                                            selectedPostIds.includes(post.id)
-                                              ? "bg-m3-primary border-m3-primary text-white scale-100"
-                                              : "bg-black/35 border-white/40 text-transparent opacity-0 group-hover:opacity-100 scale-95"
-                                          }`}
-                                        >
-                                          <Check size={11} className="stroke-[3]" />
-                                        </div>
-                                        {/* Thumbnail */}
-                                        <div className="w-10 h-10 rounded-md overflow-hidden shrink-0 bg-m3-surface-low border border-m3-outline-variant/10 relative">
-                                          <InstagramImage
-                                            post={fullPost}
-                                            src={fullPost.thumbnailUrl || ""}
-                                            alt={fullPost.caption || "Thumbnail"}
-                                            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                                          />
-                                          {/* Overlay video indicator */}
-                                          {isVideo && (
-                                            <div className="absolute right-1 bottom-1 px-1 py-0.5 rounded-sm text-[8px] font-extrabold tracking-wider bg-black/55 text-white flex items-center gap-0.5 z-10">
-                                              <Film
-                                                size={8}
-                                                className="text-m3-primary"
-                                              />
-                                            </div>
-                                          )}
-                                        </div>
-                                        {/* Details */}
-                                        <div className="flex-1 min-w-0 pr-2">
-                                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                            <span
-                                              onClick={(e) => {
-                                                e.stopPropagation();
-                                                if (fullPost.creatorUsername)
-                                                  setCreatorFilter(
-                                                    fullPost.creatorUsername,
-                                                  );
-                                              }}
-                                              className="text-xs font-bold text-m3-primary hover:underline"
-                                            >
-                                              @{highlightText(fullPost.creatorUsername || "creator", searchQuery)}
-                                            </span>
-                                            {formattedDate && (
-                                              <>
-                                                <span className="text-[10px] text-m3-outline-variant">
-                                                  •
-                                                </span>
-                                                <span className="text-[10px] font-medium text-m3-on-surface-variant/70 flex items-center gap-1">
-                                                  <Calendar size={10} />
-                                                  {formattedDate}
-                                                </span>
-                                              </>
-                                            )}
-                                          </div>
-                                          <p className="text-[11px] sm:text-xs text-m3-on-surface font-semibold line-clamp-1 mt-0.5 leading-normal">
-                                            {fullPost.caption ? (
-                                              highlightText(fullPost.caption, searchQuery)
-                                            ) : (
-                                              <span className="italic font-normal text-m3-outline">
-                                                No caption text
-                                              </span>
-                                            )}
-                                          </p>
-                                          {/* Tags display */}
-                                          {fullPost.tags &&
-                                            fullPost.tags.length > 0 && (
-                                              <div className="flex flex-wrap gap-1 mt-1 overflow-hidden max-h-4">
-                                                {fullPost.tags
-                                                  .slice(0, 5)
-                                                  .map((tag) => (
-                                                    <span
-                                                      key={tag}
-                                                      onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        toggleTagFilter(tag);
-                                                      }}
-                                                      className="inline-flex items-center gap-0.5 px-2 py-0 rounded-sm text-[8px] font-bold bg-m3-surface-variant/35 text-m3-on-surface-variant hover:bg-m3-primary/10 hover:text-m3-primary transition-all shrink-0 cursor-pointer"
-                                                    >
-                                                      #{tag}
-                                                    </span>
-                                                  ))}
-                                                {fullPost.tags.length > 5 && (
-                                                  <span className="text-[9px] font-extrabold text-m3-outline px-1 shrink-0">
-                                                    +{fullPost.tags.length - 5} more
-                                                  </span>
-                                                )}
-                                              </div>
-                                            )}
-                                        </div>
-                                        {/* Right Action Buttons */}
-                                        <div className="flex items-center gap-2 shrink-0">
-                                          {fullPost.mediaType === "carousel" && (
-                                            <div
-                                              className="w-6 h-6 rounded-md bg-m3-surface-variant/30 flex items-center justify-center text-m3-on-surface-variant/70"
-                                              title="Carousel post"
-                                            >
-                                              <Layers size={10} />
-                                            </div>
-                                          )}
-                                        </div>
-                                      </motion.div>
-                                    </div>
+                                      />
+                                    </motion.div>
                                   );
                                 })}
-                              </div>
-                            );
-                          }
-                          
-                          return null;
-                        }}
-                      />
-                    ) : (
-                      <div className="flex gap-4 w-full items-start justify-center">
-                        {Array.from({ length: masonryColumns }).map((_, colIdx) => (
-                          <div key={colIdx} className="flex-1 flex flex-col gap-4 min-w-0">
-                            {visiblePosts
-                              .filter((_, postIdx) => postIdx % masonryColumns === colIdx)
-                              .map((post) => (
-                                <div
-                                  key={post.id}
-                                  id={`post-card-container-${post.id}`}
-                                  className="w-full"
-                                >
-                                  <MemoizedPostCard
-                                    post={post}
-                                    isSelected={selectedPostIds.includes(post.id)}
-                                    onToggleSelect={(e) => toggleSelect(post.id, e)}
-                                    onTagClick={toggleTagFilter}
-                                    onCreatorClick={setCreatorFilter}
-                                    onPeek={setPeekPost}
-                                    onClick={() => setDetailPost(post)}
-                                    isKeyboardFocused={
-                                      keyboardFocusedId === post.id
-                                    }
-                                    onMouseEnter={() =>
-                                      setKeyboardFocusedId(post.id)
-                                    }
-                                  />
-                                </div>
-                              ))}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </motion.div>
+                            </motion.div>
+                          ))}
+                        </motion.div>
+                      )}
+                    </motion.div>
+                  </LayoutGroup>
                 </>
               )}
             </AnimatePresence>
@@ -2729,7 +2965,7 @@ export const DashboardView = React.memo(
           )}
         </AnimatePresence>
 
-        {/* Telegram Quick Peek Modal Overlay */}
+        {/* Quick Peek Modal Overlay */}
         <AnimatePresence>
           {peekPost && (
             <TelegramQuickPeek
@@ -2770,6 +3006,8 @@ export const DashboardView = React.memo(
                   onTagClick={toggleTagFilter}
                   onCreatorClick={setCreatorFilter}
                   isDetailMode={true}
+                  creatorFilter={creatorFilter}
+                  onClose={() => setDetailPost(null)}
                 />
               </div>
             </motion.div>
