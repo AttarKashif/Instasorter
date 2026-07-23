@@ -116,3 +116,55 @@ self.addEventListener('fetch', (event) => {
     fetch(request).catch(() => caches.match(request))
   );
 });
+
+// Background Sync Listener (Triggers when connectivity is restored or browser runs sync in background)
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'background-sync-thumbnails' || event.tag === 'sync-pending-posts') {
+    event.waitUntil(processServiceWorkerBackgroundQueue());
+  }
+});
+
+// Periodic Background Sync Listener (Triggers periodically by OS/Browser even when tab is closed)
+self.addEventListener('periodicsync', (event) => {
+  if (event.tag === 'periodic-thumbnail-scrape') {
+    event.waitUntil(processServiceWorkerBackgroundQueue());
+  }
+});
+
+// Client Message Listener
+self.addEventListener('message', (event) => {
+  if (!event.data) return;
+
+  if (event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  } else if (event.data.type === 'OFFLOAD_BACKGROUND_QUEUE') {
+    const posts = event.data.posts || [];
+    if (posts.length > 0) {
+      event.waitUntil(
+        fetch('/api/queue-background-scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ posts }),
+        }).catch((err) => console.warn('[SW] Background scrape offload error:', err))
+      );
+    }
+  }
+});
+
+// Helper function to process background queue via server endpoint
+async function processServiceWorkerBackgroundQueue() {
+  try {
+    console.log('[ServiceWorker] Executing background sync queue task...');
+    // Request server to process any pending items in its server-side background queue
+    const response = await fetch('/api/queue-background-scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ posts: [] }), // Triggers queue check / process
+    });
+    if (response.ok) {
+      console.log('[ServiceWorker] Background sync queue successfully pinged.');
+    }
+  } catch (err) {
+    console.warn('[ServiceWorker] Background sync failed:', err);
+  }
+}

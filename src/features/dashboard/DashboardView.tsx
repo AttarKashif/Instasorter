@@ -1,5 +1,21 @@
+import {
+  useSearchHistory,
+  RecentSearchHistory,
+} from "./components/RecentSearchHistory";
+import {
+  expandSearchQuery,
+  checkPostMatchWithSynonyms,
+} from "../../lib/searchSynonyms";
+import { SmartSearchIndicator } from "./components/SmartSearchIndicator";
+import { ForgottenGemsBanner } from "./components/ForgottenGemsBanner";
+import { BooleanSearchIndicator } from "./components/BooleanSearchIndicator";
+import {
+  hasBooleanOperators,
+  filterPostsWithBooleanQuery,
+} from "../../lib/booleanSearch";
 import { useDebounce } from "../../hooks/useDebounce";
 import { useFullPost } from "../../hooks/useFullPost";
+import { useMediaQuery } from "../../hooks/useMediaQuery";
 import React, {
   useState,
   useMemo,
@@ -27,6 +43,7 @@ import {
   runThumbnailWorker,
 } from "../../lib/thumbnailWorker";
 import {
+  RotateCcw,
   Search,
   Filter,
   ChevronDown,
@@ -68,7 +85,9 @@ import {
   Film,
   History,
   MapPin,
-  Download,
+  Shuffle,
+  Pin,
+  Star,
 } from "lucide-react";
 import Fuse from "fuse.js";
 import { motion, AnimatePresence, LayoutGroup } from "motion/react";
@@ -76,6 +95,41 @@ import { Virtuoso } from "react-virtuoso";
 import { VOCABULARY } from "../../constants/vocabulary";
 import { parseSearchQuery, highlightTextHelper } from "../../lib/highlight";
 // import { DashboardAnalytics } from './DashboardAnalytics';
+
+// Deterministic PRNG hashing function for randomized but repeatable shuffling
+function cyrb53(str: string, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed,
+    h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0, ch; i < str.length; i++) {
+    ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+// Calculate deterministic shuffle score prioritizing forgotten content
+function getPostShuffleScore(post: Post, seed: number): number {
+  const rawHash = cyrb53(`${post.id}_${seed}`, seed);
+  const normalizedHash = (rawHash % 1000000) / 1000000;
+
+  let daysAgo = 0;
+  if (post.savedAt) {
+    const diffMs = Date.now() - new Date(post.savedAt).getTime();
+    daysAgo = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+  }
+
+  // Forgotten boost factors
+  const ageBoost = Math.min(0.5, daysAgo / 100);
+  const unnotedBoost = !post.notes || post.notes.trim().length === 0 ? 0.2 : 0;
+  const nonFavBoost = !post.isFavorite ? 0.1 : 0;
+
+  return normalizedHash + ageBoost + unnotedBoost + nonFavBoost;
+}
 
 interface DashboardViewProps {
   posts: Post[];
@@ -92,6 +146,7 @@ interface DashboardViewProps {
   initialStartDate?: string;
   initialEndDate?: string;
   initialSortBy?: string;
+  viewportWidth?: number;
 }
 
 interface MemoizedPostCardProps {
@@ -107,6 +162,7 @@ interface MemoizedPostCardProps {
   isDetailMode?: boolean;
   creatorFilter?: string;
   onClose?: () => void;
+  isImmersive?: boolean;
 }
 
 const MemoizedPostCard = React.memo(
@@ -132,6 +188,130 @@ function chunkArray<T>(arr: T[], size: number): T[][] {
 
 let savedDashboardScrollTop = 0;
 
+const LocalGroupPreviewCover = React.memo(({ posts, name }: { posts: Post[]; name: string }) => {
+  const collectionCovers = usePostStore((state) => state.collectionCovers);
+  const customCover = name ? collectionCovers[name] : undefined;
+  const customCoverPost = customCover?.coverPostId ? posts.find(p => p.id === customCover.coverPostId) : undefined;
+  const customCoverUrl = customCover?.coverImageUrl || customCoverPost?.thumbnailUrl;
+
+  if (customCoverUrl) {
+    return (
+      <div className="w-full h-full relative overflow-hidden rounded-xl">
+        <img
+          src={customCoverUrl}
+          alt={`${name} Cover`}
+          className="w-full h-full object-cover group-hover/card:scale-110 transition-transform duration-700 ease-out"
+          referrerPolicy="no-referrer"
+        />
+        <div className="absolute top-2 left-2 bg-amber-500/90 backdrop-blur-md text-stone-950 font-extrabold text-[9px] px-1.5 py-0.5 rounded-md shadow-xs flex items-center gap-1 z-20">
+          <Star size={9} className="fill-current" />
+          <span>Cover</span>
+        </div>
+      </div>
+    );
+  }
+
+  const postsWithThumb = posts.filter(
+    (p) => p.thumbnailStatus === "success" && p.thumbnailUrl
+  );
+
+  if (postsWithThumb.length >= 4) {
+    return (
+      <div className="grid grid-cols-2 grid-rows-2 gap-0.5 w-full h-full">
+        {postsWithThumb.slice(0, 4).map((post) => (
+          <img
+            key={post.id}
+            src={post.thumbnailUrl}
+            alt="Album tile"
+            className="w-full h-full object-cover"
+            referrerPolicy="no-referrer"
+          />
+        ))}
+      </div>
+    );
+  } else if (postsWithThumb.length > 0) {
+    return (
+      <div className="relative w-full h-full flex items-center justify-center p-2 bg-transparent">
+        {postsWithThumb.length > 1 && (
+          <div className="absolute inset-x-5 bottom-0 h-[88%] bg-m3-surface-container border border-m3-outline-variant/15 rounded-xl opacity-40 translate-y-1 scale-95 shadow-2xs" />
+        )}
+        {postsWithThumb.length > 2 && (
+          <div className="absolute inset-x-4 bottom-1.5 h-[88%] bg-m3-surface-container border border-m3-outline-variant/20 rounded-xl opacity-70 translate-y-0.5 scale-[0.98] shadow-2xs" />
+        )}
+        <div className="w-full h-full rounded-xl overflow-hidden border border-m3-outline-variant/35 shadow-sm relative z-10 bg-m3-surface-container-highest">
+          <img
+            src={postsWithThumb[0].thumbnailUrl}
+            alt="Album Cover"
+            className="w-full h-full object-cover group-hover/card:scale-110 transition-transform duration-700 ease-out"
+            referrerPolicy="no-referrer"
+          />
+        </div>
+      </div>
+    );
+  } else {
+    return (
+      <div className="w-full h-full flex items-center justify-center bg-m3-surface-container-highest text-m3-outline/55">
+        <Folder size={32} className="stroke-[1.5]" />
+      </div>
+    );
+  }
+});
+LocalGroupPreviewCover.displayName = "LocalGroupPreviewCover";
+
+const LocalGroupCard = React.memo(({ name, posts, onClick }: { name: string; posts: Post[]; onClick: () => void }) => {
+  const pinnedCollections = usePostStore((state) => state.pinnedCollections);
+  const togglePinCollection = usePostStore((state) => state.togglePinCollection);
+  const isPinned = pinnedCollections.includes(name);
+
+  return (
+    <motion.div
+      whileHover={{ scale: 1.015, y: -3 }}
+      whileTap={{ scale: 0.985 }}
+      onClick={onClick}
+      className="group/card relative p-3 bg-m3-surface-low hover:bg-m3-surface-container rounded-[20px] border border-m3-outline-variant/25 hover:border-m3-primary/30 hover:shadow-glass-md cursor-pointer flex flex-col gap-2.5 h-full transition-all duration-300"
+    >
+      <div className="aspect-square rounded-xl bg-m3-surface-container-highest overflow-hidden relative shadow-inner">
+        <LocalGroupPreviewCover posts={posts} name={name} />
+
+        {/* Pin Button for Collections */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            togglePinCollection(name);
+            triggerVibration("medium");
+          }}
+          className={`absolute top-2 left-2 p-1.5 rounded-full backdrop-blur-md shadow-sm border transition-all z-20 cursor-pointer ${
+            isPinned
+              ? "bg-amber-500 text-stone-950 border-amber-300"
+              : "bg-black/60 text-white border-white/10 opacity-0 group-hover/card:opacity-100 hover:bg-black/80"
+          }`}
+          title={isPinned ? "Unpin collection" : "Pin collection"}
+        >
+          <Pin size={12} className={isPinned ? "fill-current" : ""} />
+        </button>
+
+        {/* Count Badge Overlay */}
+        <div className="absolute top-2 right-2 bg-black/60 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-full shadow-sm border border-white/10 flex items-center gap-1 z-20 transition-transform group-hover/card:scale-105">
+          <span className="font-mono">{posts.length}</span>
+          <span className="opacity-80 text-[8px] uppercase tracking-wider">
+            {posts.length === 1 ? "item" : "items"}
+          </span>
+        </div>
+      </div>
+      <div className="pt-0.5">
+        <h3
+          className="font-bold font-display text-xs truncate text-m3-on-surface group-hover/card:text-m3-primary transition-colors text-center"
+          title={name}
+        >
+          {name}
+        </h3>
+      </div>
+    </motion.div>
+  );
+});
+LocalGroupCard.displayName = "LocalGroupCard";
+
 export const DashboardView = React.memo(
   ({
     posts,
@@ -148,10 +328,19 @@ export const DashboardView = React.memo(
     initialStartDate = "",
     initialEndDate = "",
     initialSortBy = "savedAt",
+    viewportWidth,
   }: DashboardViewProps) => {
     const isLoading = usePostStore((state) => state.isLoading);
     const searchQuery = usePostStore((state) => state.searchQuery);
     const setSearchQuery = usePostStore((state) => state.setSearchQuery);
+
+    const [isImmersive, setIsImmersive] = useState<boolean>(() => {
+      return localStorage.getItem("instasorter_immersive") === "true";
+    });
+
+    useEffect(() => {
+      localStorage.setItem("instasorter_immersive", isImmersive ? "true" : "false");
+    }, [isImmersive]);
 
     const containerRef = useRef<HTMLDivElement | null>(null);
     const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
@@ -182,10 +371,14 @@ export const DashboardView = React.memo(
           // Cap it at a maximum of 3 columns for single mode to keep the Instagram-feed feel
           if (cols > 3) cols = 3;
         } else if (gridDensity === "double") {
-          // Target width for masonry-grid layout is around 280px per card
-          cols = Math.max(2, Math.floor(width / 280));
-          // Cap it at a maximum of 8 columns to keep it clean and dense even on ultra-ultra-wide monitors
-          if (cols > 8) cols = 8;
+          // Ensure grid layout switches automatically between single (1), double (2), and quad (4) columns based on screen width/device size
+          if (width <= 640) {
+            cols = 1;
+          } else if (width <= 1024) {
+            cols = 2;
+          } else {
+            cols = 4;
+          }
         }
         setMasonryColumns(cols);
       };
@@ -241,60 +434,16 @@ export const DashboardView = React.memo(
         setSearchQuery(localSearchQuery);
       }
     }, [localSearchQuery, searchQuery, setSearchQuery]);
-    const deferredSearchQuery = localSearchQuery; // Updated to localSearchQuery for instant real-time filtering
+    const deferredSearchQuery = useDebounce(localSearchQuery, 100);
 
-    const [recentSearches, setRecentSearches] = useState<string[]>(() => {
-      try {
-        const saved = localStorage.getItem("instasorter_recent_searches");
-        return saved ? JSON.parse(saved) : [];
-      } catch {
-        return [];
-      }
-    });
+    const {
+      historyItems,
+      saveQuery: saveSearchQuery,
+      togglePin: handleTogglePinSearch,
+      deleteItem: handleDeleteSearchItem,
+      clearAll: handleClearAllSearchHistory,
+    } = useSearchHistory();
     const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
-
-    const saveSearchQuery = useCallback((query: string) => {
-      const trimmed = query.trim();
-      if (!trimmed) return;
-      setRecentSearches((prev) => {
-        const filtered = prev.filter((item) => item !== trimmed);
-        const updated = [trimmed, ...filtered].slice(0, 5);
-        localStorage.setItem("instasorter_recent_searches", JSON.stringify(updated));
-        return updated;
-      });
-    }, []);
-
-    const handleDeleteRecentSearch = useCallback((e: React.MouseEvent, termToDelete: string) => {
-      e.stopPropagation();
-      setRecentSearches((prev) => {
-        const updated = prev.filter((item) => item !== termToDelete);
-        localStorage.setItem("instasorter_recent_searches", JSON.stringify(updated));
-        return updated;
-      });
-    }, []);
-
-    const handleShortcutClick = useCallback((shortcut: string, isFullQuery: boolean) => {
-      let newQuery = shortcut;
-      if (!isFullQuery) {
-        if (localSearchQuery.trim()) {
-          newQuery = `${localSearchQuery.trim()} ${shortcut}`;
-        }
-      }
-      setLocalSearchQuery(newQuery);
-      setSearchQuery(newQuery);
-      setTimeout(() => {
-        const inputEl = document.getElementById("curator-search-input");
-        if (inputEl) {
-          (inputEl as HTMLInputElement).focus();
-        }
-      }, 50);
-    }, [localSearchQuery, setSearchQuery]);
-
-    const handleClearAllRecentSearches = useCallback((e: React.MouseEvent) => {
-      e.stopPropagation();
-      setRecentSearches([]);
-      localStorage.setItem("instasorter_recent_searches", JSON.stringify([]));
-    }, []);
 
     const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
     const exportDropdownRef = useRef<HTMLDivElement>(null);
@@ -347,9 +496,27 @@ export const DashboardView = React.memo(
     const [selectedCollections, setSelectedCollections] = useState<string[]>(
       initialSelectedCollections,
     );
+    const [dashboardTab, setDashboardTab] = useState<"feed" | "collections">("feed");
     const [sortBy, setSortBy] = useState<string>(initialSortBy);
     const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+    const [shuffleSeed, setShuffleSeed] = useState<number>(42);
+    const [isShuffling, setIsShuffling] = useState(false);
     const [visibilityFilter, setVisibilityFilter] = useState<"all" | "visible" | "hidden">("visible");
+
+    const handleShuffleFeed = useCallback(() => {
+      setIsShuffling(true);
+      const nextSeed = Date.now();
+      setShuffleSeed(nextSeed);
+      setSortBy("shuffle");
+      triggerVibration(15);
+      setTimeout(() => setIsShuffling(false), 450);
+      toast.success(
+        sortBy === "shuffle"
+          ? "Reshuffled feed! Surfacing forgotten content."
+          : "Shuffled post grid! Surfacing forgotten content.",
+        { id: "shuffle-toast", icon: "🎲" }
+      );
+    }, [sortBy]);
 
     useEffect(() => {
       setFilterFavoriteOnly(initialFilterFavoriteOnly);
@@ -643,6 +810,7 @@ export const DashboardView = React.memo(
     const sortOptions = useMemo(
       () => [
         { value: "savedAt", label: "Date Saved" },
+        { value: "shuffle", label: "🎲 Shuffled / Forgotten Gems" },
         { value: "creatorUsername", label: "Creator Username" },
         { value: "mediaType", label: "Post Type / Format" },
         { value: "caption", label: "Caption Text" },
@@ -676,6 +844,32 @@ export const DashboardView = React.memo(
       });
       return counts;
     }, [posts]);
+
+    const pinnedCollections = usePostStore((state) => state.pinnedCollections);
+
+    const collectionsList = useMemo(() => {
+      return allCollections.map((name) => {
+        const colPosts = posts.filter((p) => (p.collections || []).includes(name));
+        return {
+          name,
+          posts: colPosts,
+        };
+      });
+    }, [allCollections, posts]);
+
+    const sortedCollections = useMemo(() => {
+      let result = [...collectionsList];
+      
+      result.sort((a, b) => {
+        const aPinned = pinnedCollections.includes(a.name) ? 1 : 0;
+        const bPinned = pinnedCollections.includes(b.name) ? 1 : 0;
+        if (aPinned !== bPinned) return bPinned - aPinned;
+        
+        return a.name.localeCompare(b.name);
+      });
+      
+      return result;
+    }, [collectionsList, pinnedCollections]);
 
     const handleDatePreset = (
       preset: "today" | "7days" | "30days" | "thisyear" | "all",
@@ -737,10 +931,26 @@ export const DashboardView = React.memo(
       [posts],
     );
 
+    // Active expanded query computation for category & synonym matching
+    const activeExpandedSearch = useMemo(() => {
+      if (!deferredSearchQuery) return null;
+      return expandSearchQuery(deferredSearchQuery);
+    }, [deferredSearchQuery]);
+
+    // Active boolean query evaluation (AND, OR, NOT, parentheses)
+    const activeBooleanSearch = useMemo(() => {
+      if (deferredSearchQuery && hasBooleanOperators(deferredSearchQuery)) {
+        return filterPostsWithBooleanQuery(posts, deferredSearchQuery);
+      }
+      return null;
+    }, [deferredSearchQuery, posts]);
+
     // Main filter/sort computation
     const filteredPosts = useMemo(() => {
       let result = posts;
-      if (deferredSearchQuery) {
+      if (activeBooleanSearch) {
+        result = activeBooleanSearch.filteredPosts;
+      } else if (deferredSearchQuery) {
         const parsed = parseSearchQuery(deferredSearchQuery);
         if (parsed.isPrefix) {
           let tempResult = [...posts];
@@ -761,15 +971,13 @@ export const DashboardView = React.memo(
                 (p.caption || "").toLowerCase().includes(valLower),
               );
             } else if (prefix === "tag" || prefix === "hashtag") {
-              tempResult = tempResult.filter(
-                (p) =>
-                  (p.tags || []).some((t) =>
-                    t.toLowerCase().includes(valLower),
-                  ) ||
-                  (p.hashtags || []).some((h) =>
-                    h.toLowerCase().includes(valLower),
-                  ),
-              );
+              const tagExpanded = expandSearchQuery(value);
+              tempResult = tempResult.filter((p) => {
+                const pTags = [...(p.tags || []), ...(p.hashtags || [])].map((t) => t.toLowerCase());
+                return tagExpanded.expandedTerms.some((term) =>
+                  pTags.some((pt) => pt.includes(term))
+                );
+              });
             } else if (prefix === "collection" || prefix === "folder") {
               tempResult = tempResult.filter((p) =>
                 (p.collections || []).some((c) =>
@@ -802,39 +1010,35 @@ export const DashboardView = React.memo(
           });
 
           if (parsed.generalText) {
-            const subFuse = new Fuse(tempResult, {
-              keys: [
-                "caption",
-                "creatorUsername",
-                "creatorName",
-                "notes",
-                "hashtags",
-                "tags",
-                "collections",
-              ],
-              threshold: 0.3,
-            });
-            result = subFuse.search(parsed.generalText).map((r) => r.item);
-          } else {
-            result = tempResult;
+            const genExpanded = expandSearchQuery(parsed.generalText);
+            tempResult = tempResult.filter(
+              (p) => checkPostMatchWithSynonyms(p, genExpanded).matches
+            );
           }
+          result = tempResult;
         } else {
-          // Smart real-time substring matching on creator, hashtags, caption, and notes as user types
-          const valLower = deferredSearchQuery.toLowerCase();
-          result = posts.filter((p) => {
-            const matchesCreator =
-              (p.creatorUsername || "").toLowerCase().includes(valLower) ||
-              (p.creatorName || "").toLowerCase().includes(valLower);
-            const matchesHashtags =
-              (p.hashtags || []).some((h) => h.toLowerCase().includes(valLower)) ||
-              (p.tags || []).some((t) => t.toLowerCase().includes(valLower));
-            const matchesCaption = (p.caption || "").toLowerCase().includes(valLower);
-            const matchesNotes = (p.notes || "").toLowerCase().includes(valLower);
+          // Smart category & synonym matching across captions, tags, hashtags, notes, and collections
+          if (activeExpandedSearch) {
+            result = posts.filter(
+              (p) => checkPostMatchWithSynonyms(p, activeExpandedSearch).matches
+            );
+          } else {
+            const valLower = deferredSearchQuery.toLowerCase();
+            result = posts.filter((p) => {
+              const matchesCreator =
+                (p.creatorUsername || "").toLowerCase().includes(valLower) ||
+                (p.creatorName || "").toLowerCase().includes(valLower);
+              const matchesHashtags =
+                (p.hashtags || []).some((h) => h.toLowerCase().includes(valLower)) ||
+                (p.tags || []).some((t) => t.toLowerCase().includes(valLower));
+              const matchesCaption = (p.caption || "").toLowerCase().includes(valLower);
+              const matchesNotes = (p.notes || "").toLowerCase().includes(valLower);
 
-            return matchesCreator || matchesHashtags || matchesCaption || matchesNotes;
-          });
+              return matchesCreator || matchesHashtags || matchesCaption || matchesNotes;
+            });
+          }
 
-          // Fallback to fuzzy search if no exact substring matches are found
+          // Fallback to fuzzy search if no exact or synonym matches found
           if (result.length === 0) {
             result = fuse.search(deferredSearchQuery).map((r) => r.item);
           }
@@ -911,7 +1115,11 @@ export const DashboardView = React.memo(
       const sorted = [...result];
       sorted.sort((a, b) => {
         let cmp = 0;
-        if (sortBy === "savedAt") {
+        if (sortBy === "shuffle") {
+          const scoreA = getPostShuffleScore(a, shuffleSeed);
+          const scoreB = getPostShuffleScore(b, shuffleSeed);
+          cmp = scoreB - scoreA;
+        } else if (sortBy === "savedAt") {
           const timeA = a.savedAt ? new Date(a.savedAt).getTime() : 0;
           const timeB = b.savedAt ? new Date(b.savedAt).getTime() : 0;
           cmp = timeB - timeA;
@@ -952,6 +1160,7 @@ export const DashboardView = React.memo(
       selectedCollections,
       sortBy,
       sortOrder,
+      shuffleSeed,
       visibilityFilter,
       deferredCreatorFilter,
     ]);
@@ -1557,24 +1766,34 @@ export const DashboardView = React.memo(
                 </div>
               ) : (
                 <>
+                  <div className="flex items-center gap-4 py-1 shrink-0">
+                    <h1 className="text-base sm:text-lg md:text-xl font-bold font-display tracking-tight text-m3-on-surface leading-none">
+                      {viewInfo.title}
+                    </h1>
+                  </div>
+
                   {/* Right side: Compact layout selectors & unified Curator Bar Toggle */}
                   {posts.length > 0 && (
-                    <div className="flex items-center gap-2.5 md:gap-3 flex-1 md:flex-initial justify-end ml-auto">
-                      {/* Dashboard Search Input - adjacent to Sort & Filter button */}
+                    <div className="flex items-center gap-2 md:gap-3 flex-1 md:flex-initial justify-start md:justify-end ml-auto overflow-x-auto scrollbar-none pb-1 -mb-1 max-w-full select-none">
+                      {/* Dashboard Search Input with Recent Search History & Presets */}
                       <div className="relative w-36 sm:w-48 md:w-60 lg:w-64 shrink-0">
                         <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 pointer-events-none text-m3-outline">
                           <Search size={12} />
                         </span>
                         <input
-                          placeholder="Search feed..."
+                          id="curator-search-input"
+                          placeholder="What are you looking for? (caption, tag, creator)"
                           value={localSearchQuery}
                           onChange={(e) => setLocalSearchQuery(e.target.value)}
                           onFocus={() => setIsSearchDropdownOpen(true)}
-                          onBlur={() => setTimeout(() => setIsSearchDropdownOpen(false), 250)}
+                          onBlur={() =>
+                            setTimeout(() => setIsSearchDropdownOpen(false), 200)
+                          }
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
                               saveSearchQuery(localSearchQuery);
                               (e.target as HTMLInputElement).blur();
+                              setIsSearchDropdownOpen(false);
                             }
                           }}
                           className="pl-7 pr-7 py-1 w-full border border-m3-outline-variant/30 bg-m3-surface-container-low text-m3-on-surface hover:border-m3-outline focus:border-m3-primary focus:bg-m3-surface rounded-lg text-[11px] focus:outline-none transition-all h-8 font-sans"
@@ -1591,146 +1810,26 @@ export const DashboardView = React.memo(
                           </button>
                         )}
 
-                        {/* Recent & Advanced Search Dropdown linked inline */}
-                        {isSearchDropdownOpen && (
-                          <div className="absolute top-full right-0 mt-1.5 w-64 bg-m3-surface border border-m3-outline-variant/30 rounded-2xl shadow-lg z-50 overflow-hidden font-sans">
-                            {/* Search Syntax Guide & Shortcuts */}
-                            <div className="p-2.5 border-b border-m3-outline-variant/15 select-none bg-m3-surface-low/50">
-                              <div className="text-[9px] font-bold text-m3-outline uppercase tracking-wider mb-1.5 font-display text-left">
-                                Search Shortcuts
-                              </div>
-                              <div className="grid grid-cols-2 gap-1">
-                                <button
-                                  onMouseDown={() => handleShortcutClick("from:", false)}
-                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
-                                >
-                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">from:user</span>
-                                </button>
-                                <button
-                                  onMouseDown={() => handleShortcutClick("tag:", false)}
-                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
-                                >
-                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">tag:design</span>
-                                </button>
-                                <button
-                                  onMouseDown={() => handleShortcutClick("collection:", false)}
-                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
-                                >
-                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">folder:</span>
-                                </button>
-                                <button
-                                  onMouseDown={() => handleShortcutClick("is:favorite", true)}
-                                  className="flex items-center justify-between p-1 rounded-md border border-m3-outline-variant/25 bg-m3-surface hover:bg-m3-surface-variant/25 transition-all text-left text-[10px] font-medium cursor-pointer"
-                                >
-                                  <span className="font-mono text-[10px] text-m3-on-surface font-semibold">is:favorite</span>
-                                </button>
-                              </div>
-                            </div>
-
-                            {recentSearches.length > 0 && (
-                              <>
-                                <div className="px-2.5 py-1 border-b border-m3-outline-variant/20 flex items-center justify-between text-[9px] font-bold text-m3-outline uppercase tracking-wider select-none font-display">
-                                  <span>Recent</span>
-                                  <button
-                                    onMouseDown={handleClearAllRecentSearches}
-                                    className="text-red-500 hover:text-red-600 transition-all cursor-pointer font-bold uppercase text-[8px] tracking-wide"
-                                  >
-                                    Clear
-                                  </button>
-                                </div>
-                                <div className="max-h-24 overflow-y-auto">
-                                  {recentSearches.map((term, index) => (
-                                    <div
-                                      key={term + index}
-                                      onMouseDown={() => {
-                                        setLocalSearchQuery(term);
-                                        setSearchQuery(term);
-                                        saveSearchQuery(term);
-                                      }}
-                                      className="px-2.5 py-1 flex items-center justify-between hover:bg-m3-surface-variant/20 cursor-pointer group/item transition-colors"
-                                    >
-                                      <div className="flex items-center gap-1.5 text-[10px] text-m3-on-surface min-w-0 flex-1 select-none font-sans text-left">
-                                        <History size={9} className="text-m3-outline shrink-0" />
-                                        <span className="truncate">{term}</span>
-                                      </div>
-                                      <button
-                                        onMouseDown={(e) => handleDeleteRecentSearch(e, term)}
-                                        className="w-4 h-4 rounded-md flex items-center justify-center text-m3-outline hover:text-red-500 hover:bg-m3-surface-variant/40 transition-all opacity-0 group-hover/item:opacity-100"
-                                        title="Remove"
-                                      >
-                                        <X size={8} />
-                                      </button>
-                                    </div>
-                                  ))}
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Export Filtered Feed Dropdown */}
-                      <div className="relative" ref={exportDropdownRef}>
-                        <button
-                          onClick={() => setIsExportDropdownOpen(!isExportDropdownOpen)}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-bold transition-all cursor-pointer h-8 ${
-                            isExportDropdownOpen
-                              ? "bg-m3-primary border-m3-primary text-m3-on-primary"
-                              : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
-                          }`}
-                          title="Export current filtered post library"
-                        >
-                          <Download size={13} />
-                          <span className="hidden sm:inline">Export Feed</span>
-                          <ChevronDown size={12} className={`transition-transform duration-200 ${isExportDropdownOpen ? "rotate-180" : ""}`} />
-                        </button>
-                        
                         <AnimatePresence>
-                          {isExportDropdownOpen && (
-                            <motion.div
-                              initial={{ opacity: 0, y: 8, scale: 0.95 }}
-                              animate={{ opacity: 1, y: 0, scale: 1 }}
-                              exit={{ opacity: 0, y: 8, scale: 0.95 }}
-                              transition={{ duration: 0.15 }}
-                              className="absolute right-0 mt-1.5 w-48 bg-m3-surface border border-m3-outline-variant/40 backdrop-blur-md rounded-xl shadow-glass-md py-1.5 z-50 flex flex-col"
-                            >
-                              <div className="px-3 py-1 text-[10px] font-bold text-m3-outline uppercase tracking-wider select-none">
-                                Export {filteredPosts.length} posts
-                              </div>
-                              <button
-                                onClick={() => {
-                                  exportFilteredJSON();
-                                  setIsExportDropdownOpen(false);
-                                }}
-                                className="flex items-center gap-2 px-3 py-1.5 text-xs text-m3-on-surface hover:bg-m3-surface-variant/30 transition-colors text-left font-medium cursor-pointer"
-                              >
-                                <div className="w-5 h-5 rounded-md bg-amber-500/10 text-amber-600 flex items-center justify-center shrink-0">
-                                  <span className="text-[10px] font-bold font-mono">JS</span>
-                                </div>
-                                <div className="flex flex-col">
-                                  <span>JSON Backup</span>
-                                  <span className="text-[9px] text-m3-outline font-normal">Full raw structure</span>
-                                </div>
-                              </button>
-                              <button
-                                onClick={() => {
-                                  exportFilteredCSV();
-                                  setIsExportDropdownOpen(false);
-                                }}
-                                className="flex items-center gap-2 px-3 py-1.5 text-xs text-m3-on-surface hover:bg-m3-surface-variant/30 transition-colors text-left font-medium cursor-pointer"
-                              >
-                                <div className="w-5 h-5 rounded-md bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
-                                  <span className="text-[10px] font-bold font-mono">CS</span>
-                                </div>
-                                <div className="flex flex-col">
-                                  <span>CSV Spreadsheet</span>
-                                  <span className="text-[9px] text-m3-outline font-normal">For Excel or Sheets</span>
-                                </div>
-                              </button>
-                            </motion.div>
+                          {isSearchDropdownOpen && (
+                            <RecentSearchHistory
+                              currentQuery={localSearchQuery}
+                              historyItems={historyItems}
+                              onSelectQuery={(q, save) => {
+                                setLocalSearchQuery(q);
+                                setSearchQuery(q);
+                                if (save) saveSearchQuery(q);
+                              }}
+                              onClose={() => setIsSearchDropdownOpen(false)}
+                              onTogglePin={handleTogglePinSearch}
+                              onDeleteItem={handleDeleteSearchItem}
+                              onClearAll={handleClearAllSearchHistory}
+                            />
                           )}
                         </AnimatePresence>
                       </div>
+
+
 
                       {/* Unified Curator Bar Toggle Button */}
                       <button
@@ -1746,6 +1845,40 @@ export const DashboardView = React.memo(
                         <span className="hidden sm:inline">Curator Bar</span>
                         {hasActiveFilters && (
                           <span className={`w-1.5 h-1.5 rounded-full ${isSidebarOpen ? "bg-white" : "bg-m3-primary"} shrink-0`} />
+                        )}
+                      </button>
+
+                      {/* Shuffle Button */}
+                      <button
+                        onClick={handleShuffleFeed}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-bold transition-all cursor-pointer h-8 active:scale-95 ${
+                          sortBy === "shuffle"
+                            ? "bg-amber-500 border-amber-500 text-stone-950 shadow-xs font-bold"
+                            : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                        }`}
+                        title="Shuffle post feed using a deterministic forgotten-gems algorithm"
+                      >
+                        <Shuffle size={13} className={isShuffling ? "animate-spin" : ""} />
+                        <span className="hidden sm:inline">Shuffle</span>
+                        {sortBy === "shuffle" && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-stone-950 shrink-0" />
+                        )}
+                      </button>
+
+                      {/* Immersive View Mode Toggle Button */}
+                      <button
+                        onClick={() => setIsImmersive(!isImmersive)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 border rounded-lg text-xs font-bold transition-all cursor-pointer h-8 ${
+                          isImmersive
+                            ? "bg-indigo-600 border-indigo-600 text-white shadow-xs"
+                            : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                        }`}
+                        title="Toggle Immersive Mode (Hides non-essential metadata for clean high-res media browsing)"
+                      >
+                        <Eye size={13} />
+                        <span className="hidden sm:inline">Immersive</span>
+                        {isImmersive && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-white shrink-0 animate-pulse" />
                         )}
                       </button>
 
@@ -1791,12 +1924,13 @@ export const DashboardView = React.memo(
                         <span className="font-semibold text-m3-outline">Sorted:</span>
                         <span className="font-bold text-m3-primary bg-m3-primary-container/10 px-1.5 py-0.5 rounded-md capitalize">
                           {sortBy === "savedAt" && "Date Saved"}
+                          {sortBy === "shuffle" && "Shuffled Gems"}
                           {sortBy === "creatorUsername" && "Creator"}
                           {sortBy === "mediaType" && "Post Type"}
                           {sortBy === "caption" && "Caption"}
                           {sortBy === "commentsCount" && "Engagement"}
                           {sortBy === "notesLength" && "Notes"}
-                          {sortBy === "tagsLength" && "Tags"} ({sortOrder})
+                          {sortBy === "tagsLength" && `Tags (${sortOrder})`}
                         </span>
                       </div>
                     </div>
@@ -2534,13 +2668,45 @@ export const DashboardView = React.memo(
                     )}
                   </div>
                 </motion.div>
+              ) : dashboardTab === "collections" && selectedCollections.length === 0 ? (
+                /* RENDER THE DETAILED COLLECTIONS GRID AT PARENT LEVEL IN MAIN AREA */
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -12 }}
+                  transition={{ type: "spring", stiffness: 350, damping: 28 }}
+                  className="w-full"
+                >
+                  {sortedCollections.length === 0 ? (
+                    <div className="text-center py-12">
+                      <Folder size={48} className="mx-auto text-m3-outline/40 mb-3" />
+                      <p className="text-sm font-bold text-m3-on-surface-variant">No collections created yet</p>
+                      <p className="text-xs text-m3-outline mt-1">Add items to a collection using post context menus or active tools.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6 max-w-7xl mx-auto w-full">
+                      {sortedCollections.map((col) => (
+                        <LocalGroupCard
+                          key={col.name}
+                          name={col.name}
+                          posts={col.posts}
+                          onClick={() => {
+                            setSelectedCollections([col.name]);
+                            setDashboardTab("feed");
+                            triggerVibration("medium");
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </motion.div>
               ) : filteredPosts.length === 0 ? (
                 /* FILTERS RETURNED EMPTY STATE */
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="h-full flex flex-col items-center justify-center gap-6 py-16 text-center max-w-sm mx-auto"
+                  className="h-full flex flex-col items-center justify-center gap-5 py-16 text-center max-w-md mx-auto px-4"
                 >
                   <motion.div
                     initial={{ scale: 0.9, opacity: 0 }}
@@ -2551,26 +2717,72 @@ export const DashboardView = React.memo(
                   </motion.div>
                   
                   <div className="space-y-2">
-                    <p className="text-lg font-bold font-display text-m3-on-surface">
-                      No matching posts
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-m3-surface-variant/50 border border-m3-outline-variant/20 text-[11px] font-mono font-bold text-m3-on-surface-variant">
+                      <span>No matching posts found</span>
+                      {activeFiltersCount > 0 && (
+                        <span className="bg-m3-primary text-m3-on-primary px-1.5 py-0.2 rounded-full text-[9px]">
+                          {activeFiltersCount} active filter{activeFiltersCount > 1 ? "s" : ""}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xl font-bold font-display text-m3-on-surface">
+                      No results match your search
                     </p>
-                    <p className="text-xs text-m3-on-surface-variant/80 leading-relaxed max-w-xs mx-auto">
-                      Try clearing search strings, active collections, folder structures, or tag selections to expand your curation feed.
+                    <p className="text-xs text-m3-on-surface-variant/80 leading-relaxed max-w-sm mx-auto">
+                      We couldn't find any posts matching your search criteria or tag/collection filters. Try adjusting your search query or clearing active filters to view your saved items.
                     </p>
                   </div>
                   
-                  {hasActiveFilters && (
-                    <button
-                      onClick={clearAllFilters}
-                      className="mt-2 px-5 py-2.5 bg-m3-primary text-m3-on-primary font-bold text-xs rounded-full shadow-xs hover:shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-1.5 mx-auto"
-                    >
-                      <span>Clear All Filters</span>
-                    </button>
-                  )}
+                  <button
+                    onClick={clearAllFilters}
+                    className="mt-3 px-6 py-2.5 bg-m3-primary text-m3-on-primary font-bold text-xs rounded-full shadow-xs hover:shadow-md hover:scale-[1.02] transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2 mx-auto border border-m3-outline-variant/20"
+                  >
+                    <RotateCcw size={14} className="shrink-0" />
+                    <span>Clear Search & All Filters</span>
+                  </button>
                 </motion.div>
               ) : (
                 <>
                   {/* <DashboardAnalytics posts={posts} /> */}
+
+                  <ForgottenGemsBanner posts={posts} />
+
+                  {activeBooleanSearch ? (
+                    <BooleanSearchIndicator
+                      query={deferredSearchQuery}
+                      tokens={activeBooleanSearch.tokens}
+                      ast={activeBooleanSearch.ast}
+                      resultsCount={filteredPosts.length}
+                      onClearSearch={() => {
+                        setLocalSearchQuery("");
+                        setSearchQuery("");
+                      }}
+                      onAppendOperator={(op) => {
+                        const newQ = localSearchQuery ? `${localSearchQuery}${op}` : op.trim();
+                        setLocalSearchQuery(newQ);
+                        setSearchQuery(newQ);
+                      }}
+                      onSetPresetQuery={(preset) => {
+                        setLocalSearchQuery(preset);
+                        setSearchQuery(preset);
+                        saveSearchQuery(preset);
+                      }}
+                    />
+                  ) : activeExpandedSearch ? (
+                    <SmartSearchIndicator
+                      expandedQuery={activeExpandedSearch}
+                      resultsCount={filteredPosts.length}
+                      onApplySynonymTerm={(term) => {
+                        setLocalSearchQuery(term);
+                        setSearchQuery(term);
+                        saveSearchQuery(term);
+                      }}
+                      onClearSearch={() => {
+                        setLocalSearchQuery("");
+                        setSearchQuery("");
+                      }}
+                    />
+                  ) : null}
 
                   {/* CONTENT VIEWS */}
                   <LayoutGroup id="dashboard-post-grid">
@@ -2765,50 +2977,57 @@ export const DashboardView = React.memo(
                           }}
                         />
                       ) : (
-                        <motion.div layout="position" className="flex gap-4 w-full items-start justify-center">
-                          {Array.from({ length: masonryColumns }).map((_, colIdx) => (
-                            <motion.div layout="position" key={colIdx} className="flex-1 flex flex-col gap-4 min-w-0">
-                              {visiblePosts
-                                .filter((_, postIdx) => postIdx % masonryColumns === colIdx)
-                                .map((post) => {
-                                  const globalIdx = visiblePosts.findIndex((p) => p.id === post.id);
-                                  return (
-                                    <motion.div
-                                      key={`${filterKey}-${post.id}`}
-                                      layout
-                                      id={`post-card-container-${post.id}`}
-                                      className="w-full"
-                                      initial={{ opacity: 0, y: 12 }}
-                                      animate={{ opacity: 1, y: 0 }}
-                                      transition={{
-                                        type: "spring",
-                                        stiffness: 260,
-                                        damping: 24,
-                                        delay: Math.min((globalIdx >= 0 ? globalIdx : 0) * 0.012, 0.25),
-                                      }}
-                                    >
-                                      <MemoizedPostCard
-                                        post={post}
-                                        isSelected={selectedPostIds.includes(post.id)}
-                                        onToggleSelect={(e) => toggleSelect(post.id, e)}
-                                        onTagClick={toggleTagFilter}
-                                        onCreatorClick={setCreatorFilter}
-                                        onPeek={setPeekPost}
-                                        onClick={() => setDetailPost(post)}
-                                        creatorFilter={creatorFilter}
-                                        isKeyboardFocused={
-                                          keyboardFocusedId === post.id
-                                        }
-                                        onMouseEnter={() =>
-                                          setKeyboardFocusedId(post.id)
-                                        }
-                                      />
-                                    </motion.div>
-                                  );
-                                })}
-                            </motion.div>
-                          ))}
-                        </motion.div>
+                        <Virtuoso
+                          customScrollParent={scrollElement || undefined}
+                          data={chunkArray(visiblePosts, masonryColumns)}
+                          itemContent={(rowIndex, rowPosts) => (
+                            <div
+                              key={`grid-row-${rowIndex}`}
+                              className="grid gap-4 w-full mb-4 px-1"
+                              style={{
+                                gridTemplateColumns: `repeat(${masonryColumns}, minmax(0, 1fr))`,
+                              }}
+                            >
+                              {rowPosts.map((post, colIdx) => {
+                                const globalIdx = rowIndex * masonryColumns + colIdx;
+                                const isSelected = selectedPostIds.includes(post.id);
+                                const isKeyboardFocused = keyboardFocusedId === post.id;
+                                return (
+                                  <motion.div
+                                    key={`${filterKey}-${post.id}`}
+                                    layout
+                                    id={`post-card-container-${post.id}`}
+                                    className="w-full post-card-container gpu-accelerated"
+                                    initial={{ opacity: 0, y: 12 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{
+                                      type: "spring",
+                                      stiffness: 260,
+                                      damping: 24,
+                                      delay: Math.min(globalIdx * 0.008, 0.2),
+                                    }}
+                                  >
+                                    <MemoizedPostCard
+                                      post={post}
+                                      isSelected={isSelected}
+                                      onToggleSelect={(e) => toggleSelect(post.id, e)}
+                                      onTagClick={toggleTagFilter}
+                                      onCreatorClick={setCreatorFilter}
+                                      onPeek={setPeekPost}
+                                      onClick={() => setDetailPost(post)}
+                                      creatorFilter={creatorFilter}
+                                      isImmersive={isImmersive}
+                                      isKeyboardFocused={isKeyboardFocused}
+                                      onMouseEnter={() =>
+                                        setKeyboardFocusedId(post.id)
+                                      }
+                                    />
+                                  </motion.div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        />
                       )}
                     </motion.div>
                   </LayoutGroup>

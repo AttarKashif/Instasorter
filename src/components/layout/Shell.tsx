@@ -19,6 +19,7 @@ import {
   Download,
   Smartphone,
   CheckCircle2,
+  CloudDownload,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { usePostStore } from "../../store/useStore";
@@ -28,6 +29,7 @@ import {
   isWorkerActive,
   registerProgressCallback,
   unregisterProgressCallback,
+  offloadPendingToBackgroundServer,
 } from "../../lib/thumbnailWorker";
 
 type ViewType = "home" | "analytics" | "settings" | "grouped";
@@ -264,108 +266,17 @@ export const Shell = ({
         </div>
       )}
 
-      {/* Mobile Sticky Top Header */}
-      <header className="md:hidden sticky top-0 z-40 w-full flex flex-col bg-m3-surface/95 backdrop-blur-xl border-b border-m3-outline-variant/30 px-4 py-3 shrink-0">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-m3-primary flex items-center justify-center text-m3-on-primary">
-              <Layers size={16} className="stroke-[2.5]" />
-            </div>
-            <span className="font-bold font-display text-base text-m3-on-surface leading-none">
-              Instasorter
-            </span>
-          </div>
-          
-          <div className="flex items-center gap-2">
-            {isInstallable && (
-              <button
-                onClick={handleInstallClick}
-                className="px-2.5 py-1.5 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-semibold flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
-                title="Install Instasorter PWA"
-              >
-                <Download size={13} />
-                <span>Install</span>
-              </button>
-            )}
+      {/* Mobile Sticky Top Header removed as requested */}
 
-            {onThemeToggle && (
-              <button
-                onClick={onThemeToggle}
-                className="p-2 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
-              >
-                {theme === "light" ? <Moon size={14} /> : <Sun size={14} />}
-              </button>
-            )}
-            
-            <button
-              onClick={() => setIsShortcutsOpen(true)}
-              className="p-2 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
-            >
-              <Keyboard size={14} />
-            </button>
-          </div>
-        </div>
-        
-
-      </header>
-
-      {/* Material 3 Desktop Navigation Drawer */}
-      <nav className="hidden md:flex w-72 bg-m3-surface border-r border-m3-outline-variant/40 shadow-sm z-10 px-4 py-8 flex-col justify-between sticky top-0 h-screen shrink-0">
+      {/* Material 3 Desktop Navigation Drawer / Rail */}
+      <nav className="hidden md:flex md:w-20 lg:w-72 bg-m3-surface border-r border-m3-outline-variant/40 shadow-sm z-10 px-2 lg:px-4 py-8 flex-col justify-between sticky top-0 h-screen shrink-0 transition-all duration-300">
         <div className="flex flex-col gap-8">
-          {/* App Header branding */}
-          <div className="px-3 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-m3-primary flex items-center justify-center text-m3-on-primary shadow-sm">
-                <Layers size={22} className="stroke-[2.5]" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold font-display tracking-tight text-m3-on-surface">
-                  {tShell.title}
-                </h1>
-                <span className="text-[10px] text-m3-outline font-semibold tracking-wider uppercase">
-                  {tShell.subtitle}
-                </span>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              {onThemeToggle && (
-                <button
-                  onClick={onThemeToggle}
-                  className="p-2.5 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
-                  title={`Switch to ${theme === "light" ? "Dark Room" : "Crisp Studio"}`}
-                >
-                  <AnimatePresence mode="wait">
-                    <motion.div
-                      key={theme}
-                      initial={{ rotate: -90, scale: 0.8, opacity: 0 }}
-                      animate={{ rotate: 0, scale: 1, opacity: 1 }}
-                      exit={{ rotate: 90, scale: 0.8, opacity: 0 }}
-                      transition={{ type: "spring", stiffness: 200, damping: 20 }}
-                    >
-                      {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
-                    </motion.div>
-                  </AnimatePresence>
-                </button>
-              )}
-
-              <button
-                onClick={() => setIsShortcutsOpen(true)}
-                className="p-2.5 rounded-xl text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/35 transition-all duration-200 cursor-pointer flex items-center justify-center border border-m3-outline-variant/10 shadow-xs"
-                title="Keyboard Shortcuts (?)"
-              >
-                <Keyboard size={16} />
-              </button>
-            </div>
-          </div>
-
-
-
           {/* Navigation Items */}
           <div className="flex flex-col gap-1">
             {isImporting && (
-              <div className="mx-4 my-2 p-3 bg-m3-primary-container/30 rounded-2xl flex items-center gap-3 text-xs text-m3-on-primary-container">
-                <RefreshCw className="animate-spin" size={16} />
-                <span className="truncate">
+              <div className="mx-1 lg:mx-4 my-2 p-3 bg-m3-primary-container/30 rounded-2xl flex items-center justify-center lg:justify-start gap-3 text-xs text-m3-on-primary-container" title={importMessage || "Importing..."}>
+                <RefreshCw className="animate-spin shrink-0" size={16} />
+                <span className="truncate hidden lg:inline">
                   {importMessage || "Importing..."}
                 </span>
               </div>
@@ -377,7 +288,8 @@ export const Shell = ({
                 <button
                   key={item.id}
                   onClick={() => onNavigate(item.id)}
-                  className="group relative flex items-center gap-4 px-4 py-3.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary"
+                  className="group relative flex items-center justify-center lg:justify-start gap-4 p-3.5 lg:px-4 lg:py-3.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer text-center lg:text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary"
+                  title={item.label}
                 >
                   {/* M3 Active Indicator Pill */}
                   {isActive && (
@@ -394,14 +306,14 @@ export const Shell = ({
 
                   <Icon
                     size={20}
-                    className={`transition-colors duration-200 ${
+                    className={`shrink-0 transition-colors duration-200 ${
                       isActive
                         ? "text-m3-on-primary-container stroke-[2.5]"
                         : "text-m3-on-surface-variant group-hover:text-m3-on-surface"
                     }`}
                   />
 
-                  <div className="flex flex-col">
+                  <div className="flex flex-col hidden lg:flex">
                     <span
                       className={`transition-colors duration-200 ${
                         isActive
@@ -416,7 +328,7 @@ export const Shell = ({
               );
             })}
             {smartCollections.length > 0 && (
-              <div className="mt-4 px-4">
+              <div className="mt-4 px-4 hidden lg:block">
                 <p className="text-xs font-semibold text-m3-outline mb-2">
                   {tShell.smartCollections}
                 </p>
@@ -436,28 +348,29 @@ export const Shell = ({
         </div>
 
         {/* Footer info & PWA status matching M3's modest branding style */}
-        <div className="px-4 py-3 border-t border-m3-outline-variant/20 flex flex-col gap-2 mt-auto">
+        <div className="px-1 lg:px-4 py-3 border-t border-m3-outline-variant/20 flex flex-col gap-2 mt-auto">
           {isInstallable && (
             <button
               onClick={handleInstallClick}
-              className="w-full py-2 px-3 rounded-2xl bg-m3-primary-container text-m3-on-primary-container hover:bg-m3-primary hover:text-m3-on-primary text-xs font-semibold flex items-center justify-between transition-all duration-200 cursor-pointer shadow-xs group"
+              className="w-full py-2 px-2 lg:px-3 rounded-2xl bg-m3-primary-container text-m3-on-primary-container hover:bg-m3-primary hover:text-m3-on-primary text-xs font-semibold flex items-center justify-center lg:justify-between transition-all duration-200 cursor-pointer shadow-xs group"
+              title="Install Desktop App"
             >
               <div className="flex items-center gap-2">
-                <Download size={14} className="group-hover:translate-y-0.5 transition-transform" />
-                <span>Install Desktop App</span>
+                <Download size={14} className="group-hover:translate-y-0.5 transition-transform shrink-0" />
+                <span className="hidden lg:inline">Install Desktop App</span>
               </div>
-              <span className="text-[10px] uppercase tracking-wider opacity-70 font-mono">PWA</span>
+              <span className="text-[10px] uppercase tracking-wider opacity-70 font-mono hidden lg:inline">PWA</span>
             </button>
           )}
 
           {isStandalone && (
-            <div className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-medium flex items-center gap-2">
+            <div className="px-2 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-medium flex items-center justify-center lg:justify-start gap-2" title="Standalone App Active">
               <CheckCircle2 size={13} className="shrink-0" />
-              <span>Standalone App Active</span>
+              <span className="hidden lg:inline">Standalone Active</span>
             </div>
           )}
 
-          <p className="text-[11px] font-mono text-m3-outline">
+          <p className="text-[11px] font-mono text-m3-outline text-center lg:text-left hidden lg:block">
             {tShell.footerText}
           </p>
         </div>

@@ -1,6 +1,7 @@
 import { Post } from "../types/post";
 import { validateThumbnailUrl } from "./validation";
 import { classifyInstagramPost } from "./instagramClassifier";
+import { MissingCriticalFieldsError } from "./importErrors";
 
 // A curated list of gorgeous, premium, high-contrast visual covers from Unsplash
 // (spanning abstract art, modern architecture, gradients, minimalism, and cozy textures)
@@ -470,6 +471,28 @@ export const getDeterministicPalette = (id?: string | null): string[] => {
 };
 
 export const normalizeInstagramPost = (raw: any): Post => {
+  if (!raw || typeof raw !== "object") {
+    throw new MissingCriticalFieldsError("Entry is null, undefined, or not a JSON object.");
+  }
+
+  // Basic check for recognizable Instagram post fields
+  const hasUrl = !!(
+    raw.postUrl || raw.url || raw.href || raw.instagramUrl ||
+    raw.post_url || raw.media_url || raw.uri || raw.link
+  );
+  const hasMediaList = Array.isArray(raw.media_list_data) && raw.media_list_data.length > 0;
+  const hasStringMap = !!(raw.string_map_data && typeof raw.string_map_data === "object");
+  const hasTitle = typeof raw.title === "string" && raw.title.trim().length > 0;
+  const hasCaption = typeof raw.caption === "string" && raw.caption.trim().length > 0;
+  const hasLabelValues = Array.isArray(raw.label_values) && raw.label_values.length > 0;
+  const hasId = !!(raw.id || raw.fbid);
+
+  if (!hasUrl && !hasMediaList && !hasStringMap && !hasTitle && !hasCaption && !hasLabelValues && !hasId) {
+    throw new MissingCriticalFieldsError(
+      "Post entry is missing critical fields (no post URL, media URI, string_map_data, title, or caption)."
+    );
+  }
+
   // 1. Extract and Clean Post URL (extremely thorough fallback keys)
   let rawPostUrl = raw.postUrl || raw.url || raw.href || raw.instagramUrl || "";
 

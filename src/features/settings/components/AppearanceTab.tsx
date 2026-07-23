@@ -16,6 +16,7 @@ import {
   HelpCircle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { usePostStore } from "../../../store/useStore";
 
 interface AppearanceTabProps {
   theme?: "light" | "dark";
@@ -193,6 +194,8 @@ export const AppearanceTab: React.FC<AppearanceTabProps> = React.memo(({
           </div>
         </div>
       </div>
+
+
 
       {/* PWA Standalone Installation Card */}
       <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] shadow-xs overflow-hidden">

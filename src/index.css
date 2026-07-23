@@ -288,3 +288,16 @@ ul:hover {
   }
 }
 
+/* 10k Posts High-Performance GPU & Virtualization Optimizations */
+.post-card-container {
+  contain-intrinsic-size: 320px;
+  content-visibility: auto;
+}
+
+.gpu-accelerated {
+  will-change: transform, opacity;
+  transform: translateZ(0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+

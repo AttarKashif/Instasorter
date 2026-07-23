@@ -8,12 +8,16 @@ import {
   X,
   Film,
   Image as ImageIcon,
+  Download,
+  ShieldAlert,
 } from "lucide-react";
 import { Post } from "../../types/post";
 import { usePostStore } from "../../store/useStore";
 import { db } from "../../lib/db";
 import { InstagramImage } from "./InstagramImage";
 import { getSubtlePaletteColor } from "../../lib/highlight";
+import { downloadPostMedia } from "../../lib/wakeLock";
+import toast from "react-hot-toast";
 
 interface TelegramQuickPeekProps {
   post: Post | null;
@@ -124,7 +128,7 @@ export const TelegramQuickPeek = ({
         )}
 
         {/* Interactive Quick Actions Row */}
-        <div className="grid grid-cols-3 divide-x divide-m3-outline-variant/15 bg-m3-surface-low text-xs font-bold text-m3-on-surface-variant">
+        <div className="grid grid-cols-4 divide-x divide-m3-outline-variant/15 bg-m3-surface-low text-[11px] font-bold text-m3-on-surface-variant">
           <button
             onClick={handleToggleFavorite}
             className={`flex flex-col items-center gap-1.5 py-3 hover:bg-m3-surface-variant/20 transition-colors cursor-pointer ${
@@ -132,11 +136,25 @@ export const TelegramQuickPeek = ({
             }`}
           >
             <Heart
-              size={16}
+              size={15}
               fill={post.isFavorite ? "currentColor" : "none"}
               className={post.isFavorite ? "scale-110" : ""}
             />
             <span>{post.isFavorite ? "Unstar" : "Star"}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              toast.promise(downloadPostMedia(post), {
+                loading: "Downloading HD Reel/Media...",
+                success: "Saved to device downloads!",
+                error: "Download failed, opened original link",
+              });
+            }}
+            className="flex flex-col items-center gap-1.5 py-3 hover:bg-m3-surface-variant/20 transition-colors cursor-pointer text-indigo-600 dark:text-indigo-400"
+          >
+            <Download size={15} />
+            <span>Save HD</span>
           </button>
 
           {post.postUrl ? (
@@ -146,12 +164,12 @@ export const TelegramQuickPeek = ({
               rel="noopener noreferrer"
               className="flex flex-col items-center gap-1.5 py-3 hover:bg-m3-surface-variant/20 transition-colors text-center cursor-pointer"
             >
-              <ExternalLink size={16} />
-              <span>Original Link</span>
+              <ExternalLink size={15} />
+              <span>Link</span>
             </a>
           ) : (
             <div className="flex flex-col items-center gap-1.5 py-3 text-m3-outline cursor-not-allowed">
-              <ExternalLink size={16} />
+              <ExternalLink size={15} />
               <span>No Link</span>
             </div>
           )}
@@ -164,11 +182,11 @@ export const TelegramQuickPeek = ({
             }`}
           >
             {copied ? (
-              <Check size={16} className="text-m3-primary" />
+              <Check size={15} className="text-m3-primary" />
             ) : (
-              <Copy size={16} />
+              <Copy size={15} />
             )}
-            <span>{copied ? "Copied" : "Copy Text"}</span>
+            <span>{copied ? "Copied" : "Copy"}</span>
           </button>
         </div>
       </motion.div>

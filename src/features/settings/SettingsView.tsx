@@ -590,30 +590,18 @@ export const SettingsView = React.memo(
     ];
 
     return (
-      <div className="flex-1 bg-m3-surface overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-6 max-w-7xl mx-auto w-full select-none">
-        <div className="space-y-6">
-          {/* Compact Unified Settings Header */}
-          <div className="flex flex-row items-center justify-between gap-3 pb-3 border-b border-m3-outline-variant/15">
-            <div className="flex items-center gap-3 shrink-0">
-              {onNavigate && (
-                <button
-                  onClick={() => onNavigate("home")}
-                  className="flex items-center justify-center p-1.5 rounded-lg bg-m3-surface-container-low hover:bg-m3-surface-container border border-m3-outline-variant/20 transition-all text-m3-on-surface cursor-pointer hover:scale-105 active:scale-95 shadow-2xs shrink-0"
-                  title="Back to Home"
-                >
-                  <ArrowLeft size={16} />
-                </button>
-              )}
-              <div>
-                <h1 className="text-sm md:text-base font-bold font-display text-m3-on-surface tracking-tight">
-                  {t.title}
-                </h1>
-                <p className="text-[10px] text-m3-on-surface-variant font-medium">
-                  {t.subtitle}
-                </p>
-              </div>
-            </div>
+      <div className="flex-1 bg-m3-surface select-none flex flex-col">
+        {/* OPTIMIZED HEADER: Replicates the single-row Material 3 Top App Bar */}
+        <header className="border-b border-m3-outline-variant/40 bg-m3-surface shadow-sm z-10 shrink-0 flex flex-col">
+          <div className="px-4 md:px-6 py-2.5 flex items-center justify-between">
+            <h1 className="text-base sm:text-lg md:text-xl font-bold font-display tracking-tight text-m3-on-surface leading-none">
+              {t.title}
+            </h1>
           </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-6 max-w-7xl mx-auto w-full">
+          <div className="space-y-6">
 
           {/* Subnavigation Segment Row (Mobile tabs Custom Dropdown) */}
           <div className="md:hidden relative select-none z-30 mb-2">
@@ -959,7 +947,7 @@ export const SettingsView = React.memo(
           )}
         </AnimatePresence>
 
-
+      </div>
       </div>
     );
   },

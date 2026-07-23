@@ -614,3 +614,76 @@ export async function retrySingleThumbnail(postId: string) {
     runThumbnailWorker();
   }
 }
+
+// Background Offloader: Offload all pending extraction tasks to server-side background scraper
+export async function offloadPendingToBackgroundServer(): Promise<number> {
+  try {
+    const allPosts = await db.posts.toArray();
+    const pendingPosts = allPosts.filter(
+      (p) => (p.thumbnailStatus === "pending" || !p.thumbnailStatus) && p.postUrl && p.id
+    );
+
+    if (pendingPosts.length === 0) return 0;
+
+    const payload = pendingPosts.map((p) => ({
+      url: p.postUrl,
+      id: p.id,
+      mediaType: p.mediaType,
+    }));
+
+    // 1. Send keepalive fetch to server
+    if (typeof fetch !== "undefined") {
+      fetch("/api/queue-background-scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ posts: payload }),
+        keepalive: true,
+      }).catch((err) => console.warn("[Background Offloader] Fetch offload error:", err));
+    }
+
+    // 2. Delegate to Service Worker
+    if (typeof navigator !== "undefined" && navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: "OFFLOAD_BACKGROUND_QUEUE",
+        posts: payload,
+      });
+
+      // Register PWA Sync tags
+      if ("ready" in navigator.serviceWorker) {
+        navigator.serviceWorker.ready.then((reg: any) => {
+          if (reg.sync) {
+            reg.sync.register("background-sync-thumbnails").catch(() => {});
+          }
+          if (reg.periodicSync) {
+            reg.periodicSync.register("periodic-thumbnail-scrape", {
+              minInterval: 15 * 60 * 1000,
+            }).catch(() => {});
+          }
+        });
+      }
+    }
+
+    console.log(`[Background Offloader] Successfully offloaded ${pendingPosts.length} posts to server background queue.`);
+    return pendingPosts.length;
+  } catch (err) {
+    console.warn("[Background Offloader] Failed to offload pending queue:", err);
+    return 0;
+  }
+}
+
+// Auto-register lifecycle listeners so background extraction runs seamlessly when tab is hidden or closed
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      console.log("[Background Worker] Page hidden — offloading pending queue to server background scraper...");
+      offloadPendingToBackgroundServer();
+    } else if (document.visibilityState === "visible") {
+      console.log("[Background Worker] Page visible — resuming client queue worker...");
+      runThumbnailWorker();
+    }
+  });
+
+  window.addEventListener("pagehide", () => {
+    offloadPendingToBackgroundServer();
+  });
+}

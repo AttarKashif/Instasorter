@@ -34,6 +34,7 @@ import {
   Compass,
   Search,
   EyeOff,
+  Download,
 } from "lucide-react";
 import { Post } from "../../types/post";
 import { usePostStore } from "../../store/useStore";
@@ -41,9 +42,11 @@ import { db } from "../../lib/db";
 import { motion, AnimatePresence } from "motion/react";
 import { InstagramImage } from "./InstagramImage";
 import { retrySingleThumbnail, registerPostVisibility } from "../../lib/thumbnailWorker";
+import { downloadPostMedia } from "../../lib/wakeLock";
 import toast from "react-hot-toast";
 import { VOCABULARY } from "../../constants/vocabulary";
 import { highlightTextHelper, getSubtlePaletteColor } from "../../lib/highlight";
+import { triggerVibration } from "../../lib/vibrate";
 
 interface PostCardProps {
   post: Post;
@@ -58,6 +61,7 @@ interface PostCardProps {
   isDetailMode?: boolean;
   creatorFilter?: string;
   onClose?: () => void;
+  isImmersive?: boolean;
 }
 
 export const PostCard = React.memo(
@@ -74,6 +78,7 @@ export const PostCard = React.memo(
     isDetailMode = false,
     creatorFilter,
     onClose,
+    isImmersive = false,
   }: PostCardProps) => {
     const t = VOCABULARY.postcard;
     const updatePost = usePostStore((state) => state.updatePost);
@@ -560,6 +565,7 @@ export const PostCard = React.memo(
             type="button"
             onClick={(e) => {
               e.stopPropagation();
+              triggerVibration("light");
               setIsCaptionExpanded(true);
             }}
             className="text-m3-outline hover:text-m3-primary font-bold text-[11px]"
@@ -598,7 +604,8 @@ export const PostCard = React.memo(
           }`}
         >
           {/* ================= THUMBNAIL / MEDIA AREA ================= */}
-          <div
+          <motion.div
+            layoutId={`post-media-${post.id}`}
             className={`relative overflow-hidden w-full ${aspectClass} shrink-0 bg-black select-none flex flex-col justify-between group/carousel`}
           >
             {/* Background Image / Slider */}
@@ -755,6 +762,24 @@ export const PostCard = React.memo(
                   <Archive size={14} />
                 </motion.button>
 
+                {/* Download HD Media / Reel */}
+                <motion.button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toast.promise(downloadPostMedia(post), {
+                      loading: "Preparing HD media download...",
+                      success: "Download started!",
+                      error: "Download failed, opened original post link.",
+                    });
+                  }}
+                  whileTap={{ scale: 1.15 }}
+                  className="w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer text-white hover:bg-white/20"
+                  title={isVideo ? "Download HD Reel / Video" : "Download Media"}
+                >
+                  <Download size={14} />
+                </motion.button>
+
                 {/* Inline Tag Input activator */}
                 <motion.button
                   type="button"
@@ -794,118 +819,152 @@ export const PostCard = React.memo(
                 ))}
               </div>
             )}
-          </div>
+          </motion.div>
 
           {/* ================= CARD BODY (BELOW MEDIA) ================= */}
-          <div className="p-4 flex flex-col gap-2 bg-m3-surface-low flex-1">
-            {/* Header: Username & Date */}
-            <div className="flex items-center justify-between w-full">
+          {!isImmersive ? (
+            <div className="p-4 flex flex-col gap-2 bg-m3-surface-low flex-1">
+              {/* Header: Username & Date */}
+              <div className="flex items-center justify-between w-full">
+                <span
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCreatorClick?.(post.creatorUsername);
+                  }}
+                  className="font-display font-extrabold text-sm text-m3-on-surface hover:underline cursor-pointer tracking-tight"
+                >
+                  @{highlightText(post.creatorUsername || "creator", "creator")}
+                </span>
+
+                {post.savedAt && (
+                  <span className="font-mono text-[10px] text-m3-outline flex items-center gap-0.5 select-none opacity-75">
+                    <Calendar size={10} />
+                    {new Date(post.savedAt).toLocaleDateString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                )}
+              </div>
+
+              {/* Caption Preview */}
+              {displayedCaption && (
+                <p className="text-xs text-m3-on-surface-variant leading-relaxed line-clamp-2 mt-0.5">
+                  {displayedCaption}
+                </p>
+              )}
+
+              {/* Tags & Inline Adder */}
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                {post.tags && post.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onTagClick?.(tag);
+                    }}
+                    className="interactive-badge px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-m3-outline-variant/20 hover:bg-m3-primary/10 hover:text-m3-primary text-m3-secondary hover:text-m3-primary transition-all cursor-pointer"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+
+                {/* Inline Tag Input Form */}
+                <AnimatePresence mode="wait">
+                  {showTagInput ? (
+                    <motion.form
+                      initial={{ width: 0, opacity: 0 }}
+                      animate={{ width: "auto", opacity: 1 }}
+                      exit={{ width: 0, opacity: 0 }}
+                      onSubmit={(e) => {
+                        e.stopPropagation();
+                        handleAddTagSubmit(e);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center"
+                    >
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="New tag..."
+                        value={newTagInput}
+                        onChange={(e) => setNewTagInput(e.target.value)}
+                        onBlur={() => {
+                          // Submit if there's text, or hide
+                          if (!newTagInput.trim()) {
+                            setShowTagInput(false);
+                          }
+                        }}
+                        className="px-2 py-0.5 text-[10px] border border-m3-outline-variant rounded-full bg-m3-surface text-m3-on-surface outline-none focus:border-m3-primary max-w-[80px]"
+                      />
+                    </motion.form>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowTagInput(true);
+                      }}
+                      className="w-5 h-5 rounded-full border border-m3-outline-variant/30 flex items-center justify-center hover:bg-m3-primary/10 hover:text-m3-primary transition-all text-m3-outline hover:border-m3-primary/40 cursor-pointer"
+                      title="Add tag"
+                    >
+                      <Plus size={11} className="stroke-[2.5]" />
+                    </button>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              {/* Note indicator and location footer */}
+              {(post.notes || post.location) && (
+                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-m3-outline-variant/10">
+                  {post.notes && (
+                    <span className="font-mono text-[9px] text-m3-outline flex items-center gap-1 font-semibold uppercase tracking-wider bg-m3-primary/5 text-m3-primary border border-m3-primary/10 px-2 py-0.5 rounded-full">
+                      <FileText size={9} />
+                      {t.personalNote}
+                    </span>
+                  )}
+                  {post.location && (
+                    <span className="text-[10px] text-m3-on-surface-variant/70 flex items-center gap-0.5 truncate max-w-[120px]">
+                      <MapPin size={9} className="shrink-0 text-m3-outline" />
+                      {post.location}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="px-3.5 py-2.5 bg-m3-surface-low/95 backdrop-blur-md border-t border-m3-outline-variant/15 flex items-center justify-between w-full text-xs font-bold shrink-0">
               <span
                 onClick={(e) => {
                   e.stopPropagation();
                   onCreatorClick?.(post.creatorUsername);
                 }}
-                className="font-display font-extrabold text-sm text-m3-on-surface hover:underline cursor-pointer tracking-tight"
+                className="font-display font-extrabold text-xs text-m3-on-surface hover:underline cursor-pointer truncate"
               >
                 @{highlightText(post.creatorUsername || "creator", "creator")}
               </span>
-
-              {post.savedAt && (
-                <span className="font-mono text-[10px] text-m3-outline flex items-center gap-0.5 select-none opacity-75">
-                  <Calendar size={10} />
-                  {new Date(post.savedAt).toLocaleDateString(undefined, {
-                    month: "short",
-                    day: "numeric",
-                  })}
-                </span>
-              )}
-            </div>
-
-            {/* Caption Preview */}
-            {displayedCaption && (
-              <p className="text-xs text-m3-on-surface-variant leading-relaxed line-clamp-2 mt-0.5">
-                {displayedCaption}
-              </p>
-            )}
-
-            {/* Tags & Inline Adder */}
-            <div className="flex flex-wrap items-center gap-1.5 mt-2">
-              {post.tags && post.tags.map((tag) => (
-                <span
-                  key={tag}
+              <div className="flex items-center gap-2 shrink-0 text-m3-on-surface-variant">
+                {post.isFavorite && (
+                  <Heart size={13} fill="currentColor" className="text-m3-primary" />
+                )}
+                <button
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onTagClick?.(tag);
+                    toast.promise(downloadPostMedia(post), {
+                      loading: "Downloading HD Media...",
+                      success: "Download started!",
+                      error: "Download failed",
+                    });
                   }}
-                  className="interactive-badge px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-m3-outline-variant/20 hover:bg-m3-primary/10 hover:text-m3-primary text-m3-secondary hover:text-m3-primary transition-all cursor-pointer"
+                  className="p-1 rounded-full hover:bg-m3-surface-variant/40 hover:text-m3-primary transition-colors cursor-pointer"
+                  title="Download HD Media"
                 >
-                  #{tag}
-                </span>
-              ))}
-
-              {/* Inline Tag Input Form */}
-              <AnimatePresence mode="wait">
-                {showTagInput ? (
-                  <motion.form
-                    initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: "auto", opacity: 1 }}
-                    exit={{ width: 0, opacity: 0 }}
-                    onSubmit={(e) => {
-                      e.stopPropagation();
-                      handleAddTagSubmit(e);
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    className="inline-flex items-center"
-                  >
-                    <input
-                      autoFocus
-                      type="text"
-                      placeholder="New tag..."
-                      value={newTagInput}
-                      onChange={(e) => setNewTagInput(e.target.value)}
-                      onBlur={() => {
-                        // Submit if there's text, or hide
-                        if (!newTagInput.trim()) {
-                          setShowTagInput(false);
-                        }
-                      }}
-                      className="px-2 py-0.5 text-[10px] border border-m3-outline-variant rounded-full bg-m3-surface text-m3-on-surface outline-none focus:border-m3-primary max-w-[80px]"
-                    />
-                  </motion.form>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowTagInput(true);
-                    }}
-                    className="w-5 h-5 rounded-full border border-m3-outline-variant/30 flex items-center justify-center hover:bg-m3-primary/10 hover:text-m3-primary transition-all text-m3-outline hover:border-m3-primary/40 cursor-pointer"
-                    title="Add tag"
-                  >
-                    <Plus size={11} className="stroke-[2.5]" />
-                  </button>
-                )}
-              </AnimatePresence>
-            </div>
-
-            {/* Note indicator and location footer */}
-            {(post.notes || post.location) && (
-              <div className="flex items-center gap-2 mt-2 pt-2 border-t border-m3-outline-variant/10">
-                {post.notes && (
-                  <span className="font-mono text-[9px] text-m3-outline flex items-center gap-1 font-semibold uppercase tracking-wider bg-m3-primary/5 text-m3-primary border border-m3-primary/10 px-2 py-0.5 rounded-full">
-                    <FileText size={9} />
-                    {t.personalNote}
-                  </span>
-                )}
-                {post.location && (
-                  <span className="text-[10px] text-m3-on-surface-variant/70 flex items-center gap-0.5 truncate max-w-[120px]">
-                    <MapPin size={9} className="shrink-0 text-m3-outline" />
-                    {post.location}
-                  </span>
-                )}
+                  <Download size={13} />
+                </button>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </motion.div>
       );
     }
@@ -936,7 +995,8 @@ export const PostCard = React.memo(
         }`}
       >
         {/* ================= FULL COVER MEDIA CAROUSEL ================= */}
-        <div
+        <motion.div
+          layoutId={`post-media-${post.id}`}
           className={`relative overflow-hidden w-full ${aspectClass} shrink-0 bg-black select-none flex flex-col justify-between group/carousel`}
         >
           {/* Background Image / Slider */}
@@ -1412,7 +1472,7 @@ export const PostCard = React.memo(
               </div>
             </div>
           </div>
-        </div>
+        </motion.div>
 
         {/* ================= NOTES & COMMENTS EXPANDED PANEL ================= */}
         <AnimatePresence>

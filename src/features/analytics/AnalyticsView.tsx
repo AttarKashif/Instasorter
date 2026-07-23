@@ -28,6 +28,7 @@ import {
   Users,
 } from "lucide-react";
 import { Post } from "../../types/post";
+import { usePostStore } from "../../store/useStore";
 import { VOCABULARY } from "../../constants/vocabulary";
 import { CalendarHeatmap } from "../../components/ui/CalendarHeatmap";
 
@@ -122,6 +123,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
 
     const [trendTab, setTrendTab] = useState<"timeline" | "monthly">("timeline");
     const [distributionTab, setDistributionTab] = useState<"formats" | "tags" | "creators">("formats");
+    const [isHeatmapExpanded, setIsHeatmapExpanded] = useState(false);
 
     // Helper to get two initials from username
     const getInitials = (username: string) => {
@@ -188,12 +190,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
       }));
 
       if (entries.length === 0) {
-        return [
-          { name: "Apr 26", value: 4 },
-          { name: "May 26", value: 8 },
-          { name: "Jun 26", value: 12 },
-          { name: "Jul 26", value: 19 },
-        ];
+        return [];
       }
       return entries;
     }, [posts]);
@@ -245,26 +242,6 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
         });
       }
       
-      // If there are absolutely no posts, seed with clean demo frequency counts
-      if (posts.length === 0) {
-        const demoDate = new Date(2026, 6, 17); // Jul 2026
-        const demoResult = [];
-        for (let i = 5; i >= 0; i--) {
-          const d = new Date(demoDate.getFullYear(), demoDate.getMonth() - i, 1);
-          const monthLabel = d.toLocaleString("en-US", { month: "short" });
-          const yearLabel = d.toLocaleString("en-US", { year: "2-digit" });
-          const label = `${monthLabel} ${yearLabel}`;
-          const demoCounts = [3, 7, 12, 18, 25, 34];
-          demoResult.push({
-            name: label,
-            value: demoCounts[5 - i],
-            monthIndex: d.getMonth(),
-            year: d.getFullYear(),
-          });
-        }
-        return demoResult;
-      }
-      
       return result;
     }, [posts]);
 
@@ -302,13 +279,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
         .slice(0, 7);
 
       if (entries.length === 0) {
-        return [
-          { name: "design", value: 5 },
-          { name: "inspiration", value: 4 },
-          { name: "dev", value: 3 },
-          { name: "travel", value: 2 },
-          { name: "aesthetic", value: 2 },
-        ];
+        return [];
       }
       return entries;
     }, [posts]);
@@ -466,22 +437,48 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
       onNavigate("home");
     };
 
-    return (
-      <div className="flex-1 bg-m3-surface overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-6 max-w-7xl mx-auto w-full space-y-4 select-none">
-        {/* Compact Navigation Bar */}
-        <div className="flex flex-row items-center justify-between gap-3">
-          <button
-            onClick={() => onNavigate("home")}
-            className="flex items-center justify-center p-1.5 rounded-lg bg-m3-surface-container-low hover:bg-m3-surface-container border border-m3-outline-variant/20 transition-all text-m3-on-surface cursor-pointer hover:scale-105 active:scale-95 shadow-2xs shrink-0"
-            title="Back to Home"
-          >
-            <ArrowLeft size={16} />
-          </button>
-          <div className="flex items-center gap-2 bg-m3-primary/5 text-m3-primary border border-m3-primary/10 rounded-full px-3 py-1 text-xs font-semibold font-display">
-            <MousePointerClick size={12} className="stroke-[2.5]" />
-            <span>Interactive Analytics Room</span>
+    if (posts.length === 0) {
+      return (
+        <div className="flex-1 bg-m3-surface overflow-y-auto p-4 md:p-6 max-w-4xl mx-auto w-full flex flex-col items-center justify-center min-h-[400px] text-center select-none">
+          <div className="max-w-md p-8 bg-m3-surface-low border border-m3-outline-variant/25 rounded-[32px] flex flex-col items-center gap-6">
+            <div className="w-16 h-16 rounded-full bg-m3-primary/10 flex items-center justify-center text-m3-primary">
+              <TrendingUp size={32} className="stroke-[1.5]" />
+            </div>
+            <div className="space-y-2">
+              <h2 className="text-xl font-bold font-display text-m3-on-surface">
+                No Analytics Data
+              </h2>
+              <p className="text-sm text-m3-on-surface-variant/90 leading-relaxed font-sans">
+                To visualize your saving trends, media mix distribution, popular tags, and active creator statistics, please import your Instagram bookmark export file first.
+              </p>
+            </div>
+            <motion.button
+              whileHover={{ scale: 1.02, y: -2 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => {
+                usePostStore.getState().setIsImportModalOpen(true);
+              }}
+              className="px-6 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-bold text-xs flex items-center gap-2 shadow-sm cursor-pointer hover:bg-opacity-90 active:scale-95 transition-all"
+            >
+              <span>Import Data</span>
+            </motion.button>
           </div>
         </div>
+      );
+    }
+
+    return (
+      <div className="flex-1 bg-m3-surface select-none flex flex-col">
+        {/* OPTIMIZED HEADER: Replicates the single-row Material 3 Top App Bar */}
+        <header className="border-b border-m3-outline-variant/40 bg-m3-surface shadow-sm z-10 shrink-0 flex flex-col">
+          <div className="px-4 md:px-6 py-2.5 flex items-center justify-between">
+            <h1 className="text-base sm:text-lg md:text-xl font-bold font-display tracking-tight text-m3-on-surface leading-none">
+              Analytics
+            </h1>
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-6 max-w-7xl mx-auto w-full space-y-4">
 
         {/* Bento Grid Metric Badges */}
         <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-4 gap-3">
@@ -1043,15 +1040,62 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
           </div>
         </div>
 
-        {/* Calendar Heatmap Block */}
-        <CalendarHeatmap
-          posts={posts}
-          onNavigate={onNavigate}
-          setInitialStartDate={setInitialStartDate}
-          setInitialEndDate={setInitialEndDate}
-          setInitialFilterArchived={setInitialFilterArchived}
-          resetAllFilters={resetAllFilters}
-        />
+        {/* Collapsible Deep-Dive: Calendar Activity Heatmap */}
+        <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] shadow-xs overflow-hidden transition-all duration-300">
+          <button
+            onClick={() => setIsHeatmapExpanded(!isHeatmapExpanded)}
+            className="w-full p-4 sm:p-5 flex items-center justify-between text-left cursor-pointer hover:bg-m3-surface-container/30 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-xl bg-m3-primary/10 flex items-center justify-center text-m3-primary shrink-0">
+                <Calendar size={16} className="stroke-[2.5]" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold font-display text-m3-on-surface">
+                  Daily Activity Heatmap & Temporal Patterns
+                </h3>
+                <p className="text-[10px] text-m3-on-surface-variant mt-0.5">
+                  Expand to inspect year-round contribution frequency and daily bookmark habits.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold font-mono text-m3-primary bg-m3-primary/10 px-2.5 py-1 rounded-full hidden sm:inline-block">
+                {isHeatmapExpanded ? "Collapse View" : "Expand Heatmap"}
+              </span>
+              <ChevronRight
+                size={16}
+                className={`text-m3-on-surface-variant transition-transform duration-300 ${
+                  isHeatmapExpanded ? "rotate-90 text-m3-primary" : ""
+                }`}
+              />
+            </div>
+          </button>
+
+          <AnimatePresence>
+            {isHeatmapExpanded && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.3, ease: "easeInOut" }}
+                className="overflow-hidden border-t border-m3-outline-variant/15"
+              >
+                <div className="p-4 sm:p-5 bg-m3-surface">
+                  <CalendarHeatmap
+                    posts={posts}
+                    onNavigate={onNavigate}
+                    setInitialStartDate={setInitialStartDate}
+                    setInitialEndDate={setInitialEndDate}
+                    setInitialFilterArchived={setInitialFilterArchived}
+                    resetAllFilters={resetAllFilters}
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
       </div>
     );
   },

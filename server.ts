@@ -956,6 +956,56 @@ app.post("/api/fetch-thumbnail", async (req, res) => {
   }
 });
 
+// API: Download HD Media / Reel / Video attachment directly
+app.all("/api/download-media", async (req, res) => {
+  try {
+    const id = req.query.id || req.body?.id;
+    const mediaUrl = req.query.mediaUrl || req.body?.mediaUrl;
+    const filename = req.query.filename || req.body?.filename || `instasorter-media-${id || Date.now()}`;
+
+    const safeId = id ? String(id).replace(/[^a-zA-Z0-9_-]/g, '_') : 'media';
+
+    // 1. Check local thumbnail/video disk files
+    const jpgPath = path.join(THUMBNAILS_DIR, `${safeId}.jpg`);
+    const mp4Path = path.join(THUMBNAILS_DIR, `${safeId}.mp4`);
+
+    if (fs.existsSync(mp4Path)) {
+      res.setHeader('Content-Type', 'video/mp4');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}.mp4"`);
+      fs.createReadStream(mp4Path).pipe(res);
+      return;
+    }
+
+    if (fs.existsSync(jpgPath)) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}.jpg"`);
+      fs.createReadStream(jpgPath).pipe(res);
+      return;
+    }
+
+    // 2. If a remote media URL is provided, fetch and stream it directly
+    if (mediaUrl && typeof mediaUrl === 'string' && (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://'))) {
+      const response = await fetchWithTimeout(mediaUrl, { headers: getRandomHeaders() }, 8000);
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || 'application/octet-stream';
+        const isVideo = contentType.includes('video') || mediaUrl.includes('.mp4');
+        const ext = isVideo ? 'mp4' : 'jpg';
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.${ext}"`);
+        const buffer = await response.arrayBuffer();
+        res.send(Buffer.from(buffer));
+        return;
+      }
+    }
+
+    res.status(404).json({ success: false, error: "Media file or video not available for offline download" });
+  } catch (err: any) {
+    console.error("[Download Media Error]:", err);
+    res.status(500).json({ success: false, error: err.message || "Failed to download media" });
+  }
+});
+
 // Background Scraping Queue
 const backgroundQueue: { url: string, id: string, mediaType?: string }[] = [];
 let isBackgroundQueueRunning = false;

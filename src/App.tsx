@@ -21,22 +21,42 @@ import { decodeInstagramText } from "./lib/parser";
 import { Toaster } from "react-hot-toast";
 import { SkeletonLoader } from "./components/ui/SkeletonLoader";
 import { OnboardingView } from "./components/ui/OnboardingView";
+import { startBackgroundAutoOrganizer, stopBackgroundAutoOrganizer } from "./lib/backgroundAutoOrganizerWorker";
+import { useMediaQuery } from "./hooks/useMediaQuery";
 
 export default function App() {
+  const isMobile = useMediaQuery("(max-width: 640px)");
+  const isTablet = useMediaQuery("(min-width: 641px) and (max-width: 1024px)");
+  const isDesktop = useMediaQuery("(min-width: 1025px)");
+
+  // State for layout width used to recalculate grids on resize and rotation
+  const [viewportWidth, setViewportWidth] = useState(() => typeof window !== "undefined" ? window.innerWidth : 1024);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handleLayoutRecalculation = () => {
+      // Small timeout to allow the browser to fully process the orientation/resize dimensions
+      setTimeout(() => {
+        setViewportWidth(window.innerWidth);
+      }, 100);
+    };
+
+    window.addEventListener("resize", handleLayoutRecalculation);
+    window.addEventListener("orientationchange", handleLayoutRecalculation);
+
+    return () => {
+      window.removeEventListener("resize", handleLayoutRecalculation);
+      window.removeEventListener("orientationchange", handleLayoutRecalculation);
+    };
+  }, []);
+
   const [showOnboarding, setShowOnboarding] = useState(() => {
     return localStorage.getItem("instasorter_onboarding_completed") !== "true";
   });
   const [view, setView] = useState<
     "home" | "analytics" | "settings" | "grouped"
-  >(() => {
-    const saved = localStorage.getItem("currentView");
-    return saved === "home" ||
-      saved === "analytics" ||
-      saved === "settings" ||
-      saved === "grouped"
-      ? saved
-      : "home";
-  });
+  >("home");
   const [gridDensity, setGridDensity] = useState<"single" | "double" | "list">(
     () => {
       const saved = localStorage.getItem("gridDensity");
@@ -51,16 +71,25 @@ export default function App() {
   }, [view]);
 
   useEffect(() => {
-    const hasNavigatedOnce = sessionStorage.getItem("instasorter_navigated_settings");
-    if (!hasNavigatedOnce) {
-      setView("settings");
-      sessionStorage.setItem("instasorter_navigated_settings", "true");
+    if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persist) {
+      navigator.storage.persisted().then((isPersisted) => {
+        if (!isPersisted) {
+          navigator.storage.persist().catch(() => {});
+        }
+      });
     }
   }, []);
 
   useEffect(() => {
     localStorage.setItem("gridDensity", gridDensity);
   }, [gridDensity]);
+
+  useEffect(() => {
+    startBackgroundAutoOrganizer();
+    return () => {
+      stopBackgroundAutoOrganizer();
+    };
+  }, []);
   const [creatorFilter, setCreatorFilter] = useState("");
   const [initialSelectedCollections, setInitialSelectedCollections] = useState<
     string[]
@@ -436,7 +465,7 @@ export default function App() {
                   }
                 : { duration: 0 }
             }
-            className="h-full flex flex-col min-h-0"
+            className="h-full flex flex-col min-h-0 overflow-hidden"
           >
             {isLoading ? (
               <SkeletonLoader gridDensity={gridDensity} />
@@ -459,10 +488,11 @@ export default function App() {
                     initialEndDate={initialEndDate}
                     initialSortBy={initialSortBy}
                     onNavigate={handleNavigate}
+                    viewportWidth={viewportWidth}
                   />
                 )}
                 {view === "grouped" && (
-                  <GroupedView posts={posts} onNavigate={handleNavigate} />
+                  <GroupedView posts={posts} onNavigate={handleNavigate} viewportWidth={viewportWidth} />
                 )}
                 {view === "analytics" && (
                   <AnalyticsView

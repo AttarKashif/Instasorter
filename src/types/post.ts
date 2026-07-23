@@ -25,6 +25,9 @@ export interface Post {
   lastThumbnailAttempt?: Date;
   thumbnailAttempts?: number;
   visibility?: "visible" | "hidden";
+  isDeletedOnInstagram?: boolean;
+  snapshotSavedAt?: string;
+  videoUrl?: string;
 
   // Rich interactive mockup additions
   colorPalette?: string[];
@@ -44,6 +47,8 @@ export interface Collection {
   id: string;
   name: string;
   parentId?: string | null;
+  coverPostId?: string;
+  coverImageUrl?: string;
   createdAt: string;
 }
 

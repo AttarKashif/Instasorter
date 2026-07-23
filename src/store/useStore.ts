@@ -1,11 +1,18 @@
 import { create } from "zustand";
 import { Post, Collection, SmartRule } from "../types/post";
+import { db } from "../lib/db";
 
 interface PostState {
   posts: Post[];
   smartRules: SmartRule[];
   smartCollections: Collection[];
   setSmartCollections: (collections: Collection[]) => void;
+  collectionCovers: Record<string, { coverPostId?: string; coverImageUrl?: string }>;
+  setCollectionCover: (collectionName: string, coverPostId: string, coverImageUrl: string) => void;
+  loadCollectionCovers: () => Promise<void>;
+  pinnedCollections: string[];
+  togglePinCollection: (name: string) => void;
+
   isLoading: boolean;
   isImporting: boolean;
   importMessage: string | null;
@@ -37,6 +44,47 @@ export const usePostStore = create<PostState>((set) => ({
   smartRules: [],
   smartCollections: [],
   setSmartCollections: (collections) => set({ smartCollections: collections }),
+  collectionCovers: {},
+  setCollectionCover: (collectionName, coverPostId, coverImageUrl) =>
+    set((state) => ({
+      collectionCovers: {
+        ...state.collectionCovers,
+        [collectionName]: { coverPostId, coverImageUrl },
+      },
+    })),
+  loadCollectionCovers: async () => {
+    try {
+      const colls = await db.collections.toArray();
+      const map: Record<string, { coverPostId?: string; coverImageUrl?: string }> = {};
+      colls.forEach((c) => {
+        if (c.coverPostId || c.coverImageUrl) {
+          map[c.name] = { coverPostId: c.coverPostId, coverImageUrl: c.coverImageUrl };
+        }
+      });
+      set({ collectionCovers: map });
+    } catch (err) {
+      console.error("Error loading collection covers:", err);
+    }
+  },
+  pinnedCollections: (() => {
+    try {
+      const saved = localStorage.getItem("instasorter_pinned_collections");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  })(),
+  togglePinCollection: (name) =>
+    set((state) => {
+      const next = state.pinnedCollections.includes(name)
+        ? state.pinnedCollections.filter((c) => c !== name)
+        : [...state.pinnedCollections, name];
+      try {
+        localStorage.setItem("instasorter_pinned_collections", JSON.stringify(next));
+      } catch {}
+      return { pinnedCollections: next };
+    }),
+
   isLoading: true,
   isImporting: false,
   importMessage: null,

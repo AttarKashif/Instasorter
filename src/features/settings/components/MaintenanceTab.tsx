@@ -1,5 +1,28 @@
-import React from "react";
-import { Hash, RefreshCw, Layers, Trash2, FileSpreadsheet, AlertCircle, Check } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import {
+  Hash,
+  RefreshCw,
+  Layers,
+  Trash2,
+  FileSpreadsheet,
+  AlertCircle,
+  Check,
+  CloudDownload,
+  HardDrive,
+  ShieldCheck,
+  Upload,
+  Smartphone,
+  Sun,
+  Wrench,
+  Filter,
+  Database,
+  Download,
+} from "lucide-react";
+import { offloadPendingToBackgroundServer } from "../../../lib/thumbnailWorker";
+import { requestWakeLock, releaseWakeLock, isIOSDevice } from "../../../lib/wakeLock";
+import { db } from "../../../lib/db";
+import { usePostStore } from "../../../store/useStore";
+import { StorageIndicator } from "./StorageIndicator";
 
 interface MaintenanceTabProps {
   handleConsolidateTags: () => void;
@@ -14,6 +37,8 @@ interface MaintenanceTabProps {
   throttleStatus: { throttled: boolean; remaining: number };
 }
 
+type CategoryFilter = "all" | "media" | "optimization" | "backup" | "danger";
+
 export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
   handleConsolidateTags,
   retryFailedThumbnails,
@@ -26,28 +51,157 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
   isDownloading,
   throttleStatus,
 }) => {
+  const setPosts = usePostStore((state) => state.setPosts);
+  const [isPersistent, setIsPersistent] = useState<boolean>(false);
+  const [wakeLockActive, setWakeLockActive] = useState<boolean>(false);
+  const [activeCategory, setActiveCategory] = useState<CategoryFilter>("all");
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persisted) {
+      navigator.storage.persisted().then((persisted) => {
+        setIsPersistent(persisted);
+      });
+    }
+  }, []);
+
+  const handleRequestPersistence = async () => {
+    if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persist) {
+      const granted = await navigator.storage.persist();
+      setIsPersistent(granted);
+      if (granted) {
+        setToast({ type: "success", message: "Persistent Storage Granted! Safe from eviction." });
+      } else {
+        setToast({ type: "error", message: "Storage Persistence denied by browser settings." });
+      }
+    } else {
+      setToast({ type: "error", message: "Storage Persistence API not supported on this browser." });
+    }
+  };
+
+  const handleToggleWakeLock = async () => {
+    if (wakeLockActive) {
+      await releaseWakeLock();
+      setWakeLockActive(false);
+      setToast({ type: "success", message: "Screen Wake Lock released." });
+    } else {
+      const success = await requestWakeLock();
+      if (success) {
+        setWakeLockActive(true);
+        setToast({ type: "success", message: "Screen Stay-Awake active! Screen will stay on during batch crawls." });
+      } else {
+        setToast({ type: "error", message: "Could not acquire Wake Lock on this device." });
+      }
+    }
+  };
+
+  const handleRestoreDatabase = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const postsToImport = Array.isArray(parsed) ? parsed : parsed.posts || [];
+      const collectionsToImport = parsed.collections || [];
+
+      if (!Array.isArray(postsToImport) || postsToImport.length === 0) {
+        setToast({ type: "error", message: "Invalid backup file: No post objects found." });
+        return;
+      }
+
+      await db.posts.bulkPut(postsToImport);
+      if (collectionsToImport.length > 0) {
+        await db.collections.bulkPut(collectionsToImport);
+      }
+
+      const freshPosts = await db.posts.toArray();
+      setPosts(freshPosts);
+      setToast({
+        type: "success",
+        message: `Successfully restored ${postsToImport.length} posts into local database!`,
+      });
+    } catch (err: any) {
+      console.error(err);
+      setToast({ type: "error", message: "Failed to parse backup file: " + (err.message || "Invalid JSON format") });
+    } finally {
+      if (e.target) e.target.value = "";
+    }
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Background Downloader Health & Progress Dashboard */}
-        <div className="bg-m3-surface-low border border-m3-outline-variant/30 rounded-[20px] p-5 shadow-sm space-y-4 col-span-1 md:col-span-2 select-none">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-m3-outline-variant/10 pb-4">
+    <div className="space-y-5">
+      {/* Category Pills Header */}
+      <div className="flex flex-wrap items-center gap-1.5 pb-1 border-b border-m3-outline-variant/15 text-xs select-none">
+        <span className="text-[10px] font-bold text-m3-outline uppercase tracking-wider mr-1 flex items-center gap-1">
+          <Filter size={11} />
+          Filter:
+        </span>
+        <button
+          onClick={() => setActiveCategory("all")}
+          className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
+            activeCategory === "all"
+              ? "bg-m3-primary text-m3-on-primary shadow-2xs"
+              : "bg-m3-surface-variant/40 text-m3-on-surface-variant hover:bg-m3-surface-variant/70"
+          }`}
+        >
+          All Tools
+        </button>
+        <button
+          onClick={() => setActiveCategory("media")}
+          className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
+            activeCategory === "media"
+              ? "bg-m3-primary text-m3-on-primary shadow-2xs"
+              : "bg-m3-surface-variant/40 text-m3-on-surface-variant hover:bg-m3-surface-variant/70"
+          }`}
+        >
+          Media & Scraper
+        </button>
+        <button
+          onClick={() => setActiveCategory("backup")}
+          className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
+            activeCategory === "backup"
+              ? "bg-m3-primary text-m3-on-primary shadow-2xs"
+              : "bg-m3-surface-variant/40 text-m3-on-surface-variant hover:bg-m3-surface-variant/70"
+          }`}
+        >
+          Backup & Export
+        </button>
+        <button
+          onClick={() => setActiveCategory("danger")}
+          className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
+            activeCategory === "danger"
+              ? "bg-red-600 text-white shadow-2xs"
+              : "bg-red-500/10 text-red-600 hover:bg-red-500/20"
+          }`}
+        >
+          Danger Zone
+        </button>
+      </div>
+
+      {/* Visual Storage Usage & Quota Monitor */}
+      <StorageIndicator />
+
+      {/* Downloader Compact Status Banner (Shown on All or Media) */}
+      {(activeCategory === "all" || activeCategory === "media") && (
+        <div className="bg-m3-surface-low border border-m3-outline-variant/30 rounded-2xl p-4 shadow-2xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-m3-primary/10 text-m3-primary flex items-center justify-center shrink-0">
+              <div className="w-9 h-9 rounded-xl bg-m3-primary/10 text-m3-primary flex items-center justify-center shrink-0">
                 {throttleStatus.throttled ? (
-                  <AlertCircle size={20} className="text-m3-primary animate-pulse" />
+                  <AlertCircle size={18} className="text-amber-500 animate-pulse" />
                 ) : isDownloading ? (
-                  <RefreshCw size={20} className="text-m3-primary animate-spin" />
+                  <RefreshCw size={18} className="text-m3-primary animate-spin" />
                 ) : workerStats.failed > 0 ? (
-                  <AlertCircle size={20} className="text-m3-primary" />
+                  <AlertCircle size={18} className="text-red-500" />
                 ) : (
-                  <Check size={20} className="text-m3-primary" />
+                  <Check size={18} className="text-emerald-500" />
                 )}
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h4 className="text-xs font-bold text-m3-on-surface">Background Downloader</h4>
-                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                  <h4 className="text-xs font-bold text-m3-on-surface">Background Media Crawler</h4>
+                  <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
                     throttleStatus.throttled
                       ? "bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/20"
                       : isDownloading
@@ -59,251 +213,283 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
                     {throttleStatus.throttled
                       ? "COOLDOWN"
                       : isDownloading
-                      ? "ACTIVE"
+                      ? "CRAWLING"
                       : workerStats.failed > 0
-                      ? "ISSUES DETECTED"
-                      : "FULLY SYNCED"}
+                      ? "ISSUES"
+                      : "READY"}
                   </span>
                 </div>
-                <p className="text-[11px] text-m3-on-surface-variant font-medium mt-0.5">
-                  {throttleStatus.throttled
-                    ? "Rate limit protection active. Pausing requests temporarily to avoid blocks."
-                    : isDownloading
-                    ? "Crawling, cache-validating, and downloading media assets to secure offline-ready local storage."
-                    : workerStats.failed > 0
-                    ? "Synchronizer complete but some media assets failed to download. You can retry them below."
-                    : "All media files and preview assets are fully downloaded and available for offline viewing."}
+                <p className="text-[11px] text-m3-on-surface-variant font-medium">
+                  {workerStats.success} downloaded • {workerStats.pending} pending • {workerStats.failed} failed
                 </p>
               </div>
             </div>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-m3-surface-lowest/40 rounded-xl p-3 border border-m3-outline-variant/10">
-            <div className="flex flex-col gap-0.5 text-left">
-              <span className="text-[10px] text-m3-outline font-semibold uppercase tracking-wider">Downloaded</span>
-              <span className="text-sm font-bold text-m3-on-surface">{workerStats.success}</span>
-            </div>
-            <div className="flex flex-col gap-0.5 text-left">
-              <span className="text-[10px] text-m3-outline font-semibold uppercase tracking-wider">Pending Tasks</span>
-              <span className="text-sm font-bold text-m3-on-surface">{workerStats.pending}</span>
-            </div>
-            <div className="flex flex-col gap-0.5 text-left">
-              <span className="text-[10px] text-m3-outline font-semibold uppercase tracking-wider">Failed Attempts</span>
-              <span className="text-sm font-bold text-m3-on-surface text-red-500">{workerStats.failed}</span>
-            </div>
-          </div>
-
-          {/* Progress Section */}
-          {workerStats.total > 0 && (
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-[10px] text-m3-outline font-semibold">
-                <span>Synchronization Progress</span>
-                <span>{Math.round((workerStats.success / workerStats.total) * 100)}%</span>
-              </div>
-              <div className="w-full h-2 bg-m3-surface-container rounded-full overflow-hidden border border-m3-outline-variant/10">
-                <div 
-                  className={`h-full transition-all duration-500 rounded-full ${
-                    workerStats.failed > 0 && workerStats.pending === 0
-                      ? "bg-m3-primary/50"
-                      : "bg-m3-primary"
-                  }`}
-                  style={{ width: `${(workerStats.success / workerStats.total) * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Actions & Alerts inside the card */}
-          {(throttleStatus.throttled || workerStats.failed > 0) && (
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-m3-outline-variant/5">
-              {throttleStatus.throttled ? (
-                <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400 font-medium">
-                  <span>Rate limited. Cooldown timer: <strong>{throttleStatus.remaining}s</strong></span>
-                  <button
-                    onClick={() => {
-                      retryFailedThumbnails();
-                      setToast({ type: "success", message: "Bypassing cooldown..." });
-                    }}
-                    className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20 rounded text-[10px] font-bold uppercase transition-all cursor-pointer"
-                  >
-                    Bypass Cooldown
-                  </button>
-                </div>
-              ) : <div />}
-
+            {/* Downloader Quick Action Buttons */}
+            <div className="flex items-center gap-2">
+              {throttleStatus.throttled && (
+                <button
+                  onClick={() => {
+                    retryFailedThumbnails();
+                    setToast({ type: "success", message: "Bypassing cooldown..." });
+                  }}
+                  className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 rounded-lg text-xs font-bold border border-amber-500/20 transition-all cursor-pointer"
+                >
+                  Bypass Cooldown ({throttleStatus.remaining}s)
+                </button>
+              )}
               {workerStats.failed > 0 && (
                 <button
                   onClick={() => {
                     retryFailedThumbnails();
                     setToast({ type: "success", message: "Retrying failed downloads..." });
                   }}
-                  className="flex items-center gap-1.5 px-3 py-1 text-xs font-bold text-m3-primary bg-m3-primary/10 hover:bg-m3-primary/15 rounded-lg border border-m3-primary/10 transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-m3-primary bg-m3-primary/10 hover:bg-m3-primary/20 rounded-lg border border-m3-primary/15 transition-all cursor-pointer"
                 >
-                  <RefreshCw size={11} className="animate-pulse" />
-                  <span>Retry {workerStats.failed} Failed Downloads</span>
+                  <RefreshCw size={12} className="animate-pulse" />
+                  <span>Retry ({workerStats.failed})</span>
                 </button>
               )}
             </div>
+          </div>
+
+          {/* Progress Bar */}
+          {workerStats.total > 0 && (
+            <div className="space-y-1 pt-1">
+              <div className="flex justify-between text-[10px] text-m3-outline font-bold">
+                <span>Media Download Sync</span>
+                <span>{Math.round((workerStats.success / workerStats.total) * 100)}%</span>
+              </div>
+              <div className="w-full h-1.5 bg-m3-surface-container rounded-full overflow-hidden border border-m3-outline-variant/10">
+                <div
+                  className="h-full bg-m3-primary transition-all duration-500 rounded-full"
+                  style={{ width: `${(workerStats.success / workerStats.total) * 100}%` }}
+                />
+              </div>
+            </div>
           )}
         </div>
+      )}
 
-        {/* Offline PWA & Service Worker Status Card */}
-        <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 flex flex-col justify-between shadow-xs transition-all duration-300 hover:scale-[1.01] group">
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center transition-transform group-hover:scale-105">
-              <Check size={18} />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h4 className="text-xs font-bold text-m3-on-surface">PWA &amp; Offline Cache Health</h4>
-                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 uppercase font-mono">
-                  ACTIVE
-                </span>
+      {/* TOOL CATEGORIES (COMPACT ROWS) */}
+      <div className="space-y-5">
+        {/* Category 1: Media & Scraper Tools */}
+        {(activeCategory === "all" || activeCategory === "media") && (
+          <div className="space-y-2">
+            <h5 className="text-[11px] font-bold text-m3-outline uppercase tracking-wider px-1">
+              Media &amp; Scraper Tools
+            </h5>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {/* Offload Server Scraper */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                    <CloudDownload size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <h6 className="text-xs font-bold text-m3-on-surface truncate">Server Background Scraper</h6>
+                    <p className="text-[10px] text-m3-on-surface-variant truncate">
+                      Offload pending extractions to server background queue
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={async () => {
+                    const count = await offloadPendingToBackgroundServer();
+                    if (count > 0) {
+                      setToast({ type: "success", message: `Offloaded ${count} pending posts to server background!` });
+                    } else {
+                      setToast({ type: "success", message: "No pending posts to offload." });
+                    }
+                  }}
+                  className="px-3 py-1.5 bg-m3-primary text-m3-on-primary hover:bg-m3-primary/90 text-xs font-bold rounded-lg shrink-0 transition-all cursor-pointer active:scale-95"
+                >
+                  Offload Queue
+                </button>
               </div>
-              <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mt-1">
-                Instasorter is fully PWA-configured with ServiceWorker caching and IndexedDB offline persistence. You can launch and browse your collection without an internet connection.
-              </p>
+
+              {/* Redownload Missing Thumbnails */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-m3-primary/10 text-m3-primary flex items-center justify-center shrink-0">
+                    <RefreshCw size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <h6 className="text-xs font-bold text-m3-on-surface truncate">Retry Image Crawls</h6>
+                    <p className="text-[10px] text-m3-on-surface-variant truncate">
+                      Re-fetch image previews for empty or broken items
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    retryFailedThumbnails();
+                    setToast({ type: "success", message: "Retrying failed image crawls..." });
+                  }}
+                  className="px-3 py-1.5 bg-m3-surface-variant text-m3-on-surface-variant hover:bg-m3-primary hover:text-m3-on-primary text-xs font-bold rounded-lg shrink-0 transition-all cursor-pointer active:scale-95"
+                >
+                  Retry Crawls
+                </button>
+              </div>
+
+              {/* iOS Stay Awake Lock */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                    <Sun size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <h6 className="text-xs font-bold text-m3-on-surface truncate">Screen Stay-Awake</h6>
+                      {isIOSDevice() && (
+                        <span className="text-[8px] font-bold px-1 rounded bg-amber-500/15 text-amber-600 font-mono">
+                          iOS
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-m3-on-surface-variant truncate">
+                      Keep mobile display active during batch media scraping
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleToggleWakeLock}
+                  className={`px-3 py-1.5 text-xs font-bold rounded-lg shrink-0 transition-all cursor-pointer active:scale-95 border ${
+                    wakeLockActive
+                      ? "bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30"
+                      : "bg-m3-surface-variant text-m3-on-surface-variant border-transparent"
+                  }`}
+                >
+                  {wakeLockActive ? "Active" : "Enable"}
+                </button>
+              </div>
+
+              {/* PWA Cache Revalidate */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                    <Check size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <h6 className="text-xs font-bold text-m3-on-surface truncate">Offline PWA Cache</h6>
+                    <p className="text-[10px] text-m3-on-surface-variant truncate">
+                      Revalidate ServiceWorker cache for offline access
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+                      navigator.serviceWorker.controller.postMessage({ type: "SKIP_WAITING" });
+                    }
+                    setToast({ type: "success", message: "Offline cache revalidated!" });
+                  }}
+                  className="px-3 py-1.5 bg-m3-surface-variant text-m3-on-surface-variant hover:bg-m3-primary hover:text-m3-on-primary text-xs font-bold rounded-lg shrink-0 transition-all cursor-pointer active:scale-95"
+                >
+                  Revalidate
+                </button>
+              </div>
             </div>
           </div>
-          <button
-            onClick={() => {
-              if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
-                navigator.serviceWorker.controller.postMessage({ type: "SKIP_WAITING" });
-              }
-              setToast({ type: "success", message: "PWA cache revalidated. Offline storage is up to date." });
-            }}
-            className="w-full mt-5 flex items-center justify-center gap-1.5 bg-m3-surface-variant text-m3-on-surface-variant hover:bg-m3-primary hover:text-m3-on-primary rounded-xl py-2 text-xs font-bold cursor-pointer transition-all active:scale-95 shadow-2xs border border-m3-outline-variant/20"
-          >
-            <RefreshCw size={12} />
-            <span>Revalidate Offline Cache</span>
-          </button>
-        </div>
+        )}
 
-        {/* Consolidate Tags */}
-        <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 flex flex-col justify-between shadow-xs transition-all duration-300 hover:scale-[1.01] group">
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-m3-primary/10 text-m3-primary flex items-center justify-center transition-transform group-hover:scale-105">
-              <Hash size={18} />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-m3-on-surface">Consolidate Tag Taxonomy</h4>
-              <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mt-1">
-                Scans and cleans up casing inconsistencies or spelling variations across bookmark tags (e.g., merging "aesthetic" and "Aesthetic" into a single canonical tag).
-              </p>
+
+
+        {/* Category 3: Backup & Export */}
+        {(activeCategory === "all" || activeCategory === "backup") && (
+          <div className="space-y-2">
+            <h5 className="text-[11px] font-bold text-m3-outline uppercase tracking-wider px-1">
+              Backup, Import &amp; Export
+            </h5>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {/* Restore Backup */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                    <Upload size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <h6 className="text-xs font-bold text-m3-on-surface truncate">Restore Database Backup</h6>
+                    <p className="text-[10px] text-m3-on-surface-variant truncate">
+                      Import previously saved JSON database backup
+                    </p>
+                  </div>
+                </div>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleRestoreDatabase}
+                  accept=".json"
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-3 py-1.5 bg-m3-primary text-m3-on-primary hover:bg-m3-primary/90 text-xs font-bold rounded-lg shrink-0 transition-all cursor-pointer active:scale-95"
+                >
+                  Restore JSON
+                </button>
+              </div>
+
+              {/* Export CSV */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                    <FileSpreadsheet size={16} />
+                  </div>
+                  <div className="min-w-0">
+                    <h6 className="text-xs font-bold text-m3-on-surface truncate">Export Library to CSV</h6>
+                    <p className="text-[10px] text-m3-on-surface-variant truncate">
+                      Download spreadsheet compatible CSV file
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={exportCSVData}
+                  className="px-3 py-1.5 bg-m3-primary text-m3-on-primary hover:bg-m3-primary/90 text-xs font-bold rounded-lg shrink-0 transition-all cursor-pointer active:scale-95"
+                >
+                  Export CSV
+                </button>
+              </div>
             </div>
           </div>
-          <button
-            onClick={handleConsolidateTags}
-            className="w-full mt-5 flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary hover:bg-m3-primary/95 rounded-xl py-2 text-xs font-bold cursor-pointer transition-all active:scale-95 shadow-2xs border border-transparent"
-          >
-            <Hash size={12} />
-            <span>Run Tag Optimizer</span>
-          </button>
-        </div>
+        )}
 
-        {/* Retry Failed Previews */}
-        <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 flex flex-col justify-between shadow-xs transition-all duration-300 hover:scale-[1.01] group">
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-m3-primary/10 text-m3-primary flex items-center justify-center transition-transform group-hover:scale-105">
-              <RefreshCw size={18} />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-m3-on-surface">Redownload Missing Thumbnails</h4>
-              <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mt-1">
-                Initiates the local crawler in the background to automatically retry fetching image previews for bookmarks with broken, empty, or failed assets.
-              </p>
+        {/* Category 4: Danger Zone */}
+        {(activeCategory === "all" || activeCategory === "danger") && (
+          <div className="space-y-2">
+            <h5 className="text-[11px] font-bold text-red-500 uppercase tracking-wider px-1">
+              Data Reset &amp; Danger Zone
+            </h5>
+            <div className="bg-m3-surface-low border border-red-500/20 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-lg bg-red-500/10 text-red-600 flex items-center justify-center shrink-0">
+                  <Trash2 size={16} />
+                </div>
+                <div className="min-w-0">
+                  <h6 className="text-xs font-bold text-m3-on-surface truncate">Purge Saved Library Data</h6>
+                  <p className="text-[10px] text-red-600 dark:text-red-400 truncate">
+                    Irreversibly wipe local database or reset all settings
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setShowConfirmClear(true)}
+                  className="px-3 py-1.5 bg-red-500/10 hover:bg-red-600 hover:text-white text-red-600 dark:text-red-400 text-xs font-bold rounded-lg transition-all cursor-pointer border border-red-500/20 active:scale-95"
+                >
+                  Clear Database
+                </button>
+                <button
+                  onClick={() => setShowConfirmClearAll(true)}
+                  className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-all cursor-pointer active:scale-95 shadow-2xs"
+                >
+                  Reset App
+                </button>
+              </div>
             </div>
           </div>
-          <button
-            onClick={() => {
-              retryFailedThumbnails();
-              setToast({ type: "success", message: "Retrying failed previews in background..." });
-            }}
-            className="w-full mt-5 flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary hover:bg-m3-primary/95 rounded-xl py-2 text-xs font-bold cursor-pointer transition-all active:scale-95 shadow-2xs border border-transparent"
-          >
-            <RefreshCw size={12} />
-            <span>Retry Image Crawls</span>
-          </button>
-        </div>
-
-        {/* Resolve Duplicates */}
-        <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 flex flex-col justify-between shadow-xs transition-all duration-300 hover:scale-[1.01] group">
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-m3-primary/10 text-m3-primary flex items-center justify-center transition-transform group-hover:scale-105">
-              <Layers size={18} />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-m3-on-surface">Merge Duplicate Entries</h4>
-              <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mt-1">
-                Analyzes database for duplicate bookmarks with matching shortcodes or URLs, merging their custom tags, collection labels, and notes into single records.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleAnalyzeDuplicates}
-            className="w-full mt-5 flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary hover:bg-m3-primary/95 rounded-xl py-2 text-xs font-bold cursor-pointer transition-all active:scale-95 shadow-2xs border border-transparent"
-          >
-            <Layers size={12} />
-            <span>Merge Duplicates</span>
-          </button>
-        </div>
-
-
-        {/* Export to CSV */}
-        <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 flex flex-col justify-between shadow-xs transition-all duration-300 hover:scale-[1.01] group">
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-m3-primary/10 text-m3-primary flex items-center justify-center transition-transform group-hover:scale-105">
-              <FileSpreadsheet size={18} className="text-emerald-500" />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-m3-on-surface">Export Library to CSV</h4>
-              <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mt-1 font-sans">
-                Converts your saved posts, tag indices, collection labels, and curation notes into a structured CSV file for spreadsheet-compatible personal backup or external data analytics.
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={exportCSVData}
-            className="w-full mt-5 flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary hover:bg-m3-primary/95 rounded-xl py-2 text-xs font-bold cursor-pointer transition-all active:scale-95 shadow-2xs border border-transparent font-sans"
-          >
-            <FileSpreadsheet size={12} />
-            <span>Download CSV Spreadsheet</span>
-          </button>
-        </div>
-
-        {/* Clear database */}
-        <div className="bg-m3-surface-low border border-red-500/20 hover:border-red-500/40 rounded-[20px] p-5 flex flex-col justify-between shadow-xs transition-all duration-300 hover:scale-[1.01] group">
-          <div className="space-y-3">
-            <div className="w-10 h-10 rounded-xl bg-red-500/10 text-red-600 flex items-center justify-center transition-transform group-hover:scale-105">
-              <Trash2 size={18} />
-            </div>
-            <div>
-              <h4 className="text-xs font-bold text-m3-on-surface">Purge Saved Library Data</h4>
-              <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mt-1 text-red-600 dark:text-red-400 font-sans">
-                Performs a complete hard-wipe of your local IndexedDB storage or resets all cached localStorage settings.
-              </p>
-            </div>
-          </div>
-          <div className="space-y-2 mt-5">
-            <button
-              onClick={() => setShowConfirmClear(true)}
-              className="w-full flex items-center justify-center gap-1.5 bg-red-500/5 hover:bg-red-600 hover:text-white dark:bg-red-500/10 dark:hover:bg-red-600 dark:hover:text-white rounded-xl py-2 text-xs font-bold cursor-pointer border border-red-500/20 hover:border-red-600 transition-all active:scale-95 shadow-3xs"
-            >
-              <Trash2 size={12} />
-              <span>Clear Database</span>
-            </button>
-            <button
-              onClick={() => setShowConfirmClearAll(true)}
-              className="w-full flex items-center justify-center gap-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl py-2 text-xs font-bold cursor-pointer transition-all active:scale-95 shadow-2xs border border-transparent"
-            >
-              <Trash2 size={12} />
-              <span>Clear All Data &amp; Reset App</span>
-            </button>
-          </div>
-        </div>
-
+        )}
       </div>
     </div>
   );
 });
-

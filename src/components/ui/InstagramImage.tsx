@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Post } from "../../types/post";
-import { Instagram, Image as ImageIcon, Film, Layers } from "lucide-react";
+import { Instagram, Image as ImageIcon, Film, Layers, ShieldAlert, FileText } from "lucide-react";
 import { db } from "../../lib/db";
 import { usePostStore } from "../../store/useStore";
+import { getDynamicCoverByKeywords } from "../../lib/parser";
 
 interface InstagramImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   post: Post;
@@ -37,7 +38,8 @@ const getInitialImgSrc = (post: Post): string => {
     return post.thumbnailUrl;
   }
 
-  return "";
+  // Fallback to gorgeous dynamic Unsplash photo matching caption and tags
+  return getDynamicCoverByKeywords(post.caption || "", post.tags || post.hashtags || [], post.id);
 };
 
 const getDeterministicPalette = (id: string): string[] => {
@@ -193,62 +195,20 @@ export const InstagramImage = ({
   const isDataUri = post.thumbnailUrl && post.thumbnailUrl.startsWith("data:");
 
   // If the live image failed to load, and not a local base64/data URI,
-  // render our gorgeous metadata-driven custom placeholder card.
+  // render our gorgeous thematic Unsplash cover matching caption and tags.
   if (hasFailed && !isDataUri) {
-    const fallbackPalette = post.colorPalette && post.colorPalette.length >= 2
-      ? post.colorPalette
-      : getDeterministicPalette(post.id);
-
-    const fallbackGradientStyle = {
-      background: `radial-gradient(circle at 20% 20%, ${fallbackPalette[0]} 0%, transparent 60%),
-                   radial-gradient(circle at 80% 30%, ${fallbackPalette[1]} 0%, transparent 60%),
-                   radial-gradient(circle at 40% 80%, ${fallbackPalette[2] || fallbackPalette[0]} 0%, transparent 70%),
-                   var(--m3-surface-low)`,
-      filter: "blur(28px) saturate(1.1)",
-      transform: "scale(1.25)",
-    };
+    const fallbackCover = getDynamicCoverByKeywords(post.caption || "", post.tags || post.hashtags || [], post.id);
 
     return (
-      <div className="w-full h-full flex flex-col justify-between p-5 text-center select-none bg-m3-surface-container/60 border border-m3-outline-variant/20 rounded-[inherit] relative overflow-hidden group/placeholder">
-        {/* Ambient background blur */}
-        <div className="absolute inset-0 z-0 pointer-events-none opacity-30 dark:opacity-20 mix-blend-multiply dark:mix-blend-normal" style={fallbackGradientStyle} />
-        
-        {/* Header/Badge */}
-        <div className="flex items-center justify-between w-full opacity-80 text-[9px] font-mono tracking-wider text-m3-outline uppercase relative z-10">
-          <span className="flex items-center gap-1 font-semibold text-m3-primary">
-            <Instagram size={11} className="animate-pulse" />
-            Instagram
-          </span>
-          <span className="bg-m3-surface-variant/50 px-2 py-0.5 rounded-full border border-m3-outline-variant/10 text-m3-on-surface-variant font-bold">
-            {post.mediaType || "Post"}
-          </span>
-        </div>
-
-        {/* Brand Icon & "No Preview Found" */}
-        <div className="flex flex-col items-center gap-2 relative z-10 my-auto">
-          <div className="w-12 h-12 rounded-full bg-m3-surface-variant/80 border border-m3-outline-variant/30 flex items-center justify-center text-m3-on-surface-variant/80 shadow-xs group-hover/placeholder:scale-105 transition-transform duration-300">
-            <ImageIcon size={18} className="stroke-[1.75]" />
-          </div>
-          <div className="flex flex-col items-center gap-0.5">
-            <span className="text-xs font-extrabold text-m3-on-surface tracking-tight">
-              No preview found
-            </span>
-            <span className="text-[10px] text-m3-outline">
-              @{post.creatorUsername || "creator"}
-            </span>
-          </div>
-        </div>
-
-        {/* Dynamic Caption Quote snippet (max 80 chars) */}
-        <div className="w-full text-[10px] text-m3-on-surface-variant/75 font-medium leading-relaxed line-clamp-2 px-1 relative z-10 italic border-t border-m3-outline-variant/10 pt-3">
-          "
-          {post.caption
-            ?.replace(/#[\w\d_]+/gu, "")
-            .trim()
-            .substring(0, 80) || "Saved item context"}
-          "
-        </div>
-      </div>
+      <img
+        src={fallbackCover}
+        alt={alt || post.caption || "Instagram Media"}
+        loading="lazy"
+        decoding="async"
+        className={`${className} relative z-20 object-cover`}
+        referrerPolicy="no-referrer"
+        {...props}
+      />
     );
   }
 
