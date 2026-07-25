@@ -4,7 +4,7 @@
  */
 
 // Vibration pattern types
-export type VibrationPattern = "light" | "medium" | "heavy" | "double" | "warning";
+export type VibrationPattern = "light" | "medium" | "heavy" | "double" | "warning" | "tap" | "thud" | "pulse" | "success";
 
 const PATTERNS: Record<VibrationPattern, number | number[]> = {
   light: 15,
@@ -12,6 +12,10 @@ const PATTERNS: Record<VibrationPattern, number | number[]> = {
   heavy: 120,
   double: [50, 40, 50],
   warning: [100, 50, 150],
+  tap: 10,
+  thud: [80, 50, 120],
+  pulse: [30, 50, 30, 50, 60],
+  success: [40, 60, 80],
 };
 
 /**

@@ -23,6 +23,7 @@ import { requestWakeLock, releaseWakeLock, isIOSDevice } from "../../../lib/wake
 import { db } from "../../../lib/db";
 import { usePostStore } from "../../../store/useStore";
 import { StorageIndicator } from "./StorageIndicator";
+import { ForgottenGemsBanner } from "../../dashboard/components/ForgottenGemsBanner";
 
 interface MaintenanceTabProps {
   handleConsolidateTags: () => void;
@@ -52,6 +53,7 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
   throttleStatus,
 }) => {
   const setPosts = usePostStore((state) => state.setPosts);
+  const posts = usePostStore((state) => state.posts);
   const [isPersistent, setIsPersistent] = useState<boolean>(false);
   const [wakeLockActive, setWakeLockActive] = useState<boolean>(false);
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>("all");
@@ -158,6 +160,16 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
           Media & Scraper
         </button>
         <button
+          onClick={() => setActiveCategory("optimization")}
+          className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
+            activeCategory === "optimization"
+              ? "bg-m3-primary text-m3-on-primary shadow-2xs"
+              : "bg-m3-surface-variant/40 text-m3-on-surface-variant hover:bg-m3-surface-variant/70"
+          }`}
+        >
+          Memory & Gems
+        </button>
+        <button
           onClick={() => setActiveCategory("backup")}
           className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
             activeCategory === "backup"
@@ -181,6 +193,13 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
 
       {/* Visual Storage Usage & Quota Monitor */}
       <StorageIndicator />
+
+      {/* Forgotten Gems & Memory Capsule Engine (Shown on All or Optimization) */}
+      {(activeCategory === "all" || activeCategory === "optimization") && (
+        <div className="w-full">
+          <ForgottenGemsBanner posts={posts} />
+        </div>
+      )}
 
       {/* Downloader Compact Status Banner (Shown on All or Media) */}
       {(activeCategory === "all" || activeCategory === "media") && (

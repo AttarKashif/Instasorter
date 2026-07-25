@@ -2,12 +2,26 @@ import { db } from "./db";
 import { usePostStore } from "../store/useStore";
 import { Post } from "../types/post";
 
+// Core Worker Execution State Flags
 let isWorkerRunning = false;
 let stopRequested = false;
+let isPaused = false;
 let globalThrottleUntil: number | null = null;
+let speedMode: "eco" | "normal" | "fast" = "normal";
 
-// Track posts currently visible in the viewport
+// Track viewport visibility
 const visiblePostIdsSet = new Set<string>();
+
+// Real-Time Telemetry & Diagnostics Counters
+let totalProcessed = 0;
+let totalSuccesses = 0;
+let totalFailures = 0;
+let recentLatenciesMs: number[] = [];
+let workerStartTime: number | null = null;
+let currentActiveConcurrency = 1;
+
+// In-Flight Request Deduplication Map
+const inFlightRequestsMap = new Map<string, Promise<void>>();
 
 export function getVisiblePostCount() {
   return visiblePostIdsSet.size;
@@ -16,7 +30,6 @@ export function getVisiblePostCount() {
 export function registerPostVisibility(postId: string, isVisible: boolean) {
   if (isVisible) {
     visiblePostIdsSet.add(postId);
-    // If a pending post becomes visible, run worker immediately to prioritize it!
     const posts = usePostStore.getState().posts;
     const post = posts.find((p) => p.id === postId);
     if (post && (post.thumbnailStatus === "pending" || !post.thumbnailStatus)) {
@@ -51,7 +64,97 @@ export function getThrottleStatus() {
   return { throttled: false, remaining: 0 };
 }
 
-// Global callbacks for UI updates
+// User Controls: Pause, Resume & Speed Modes
+export function pauseWorker() {
+  isPaused = true;
+  notifyUI();
+}
+
+export function resumeWorker() {
+  isPaused = false;
+  notifyUI();
+  runThumbnailWorker();
+}
+
+export function setWorkerSpeedMode(mode: "eco" | "normal" | "fast") {
+  speedMode = mode;
+  notifyUI();
+}
+
+export function getWorkerSpeedMode() {
+  return speedMode;
+}
+
+export function isWorkerPaused() {
+  return isPaused;
+}
+
+// Global Diagnostics API for UI Progress Components
+export function getWorkerDiagnostics() {
+  const elapsedSec = workerStartTime ? Math.max(1, (Date.now() - workerStartTime) / 1000) : 1;
+  const itemsPerSecond = Number((totalProcessed / elapsedSec).toFixed(2));
+  
+  const avgLatencyMs = recentLatenciesMs.length > 0
+    ? Math.round(recentLatenciesMs.reduce((a, b) => a + b, 0) / recentLatenciesMs.length)
+    : 0;
+
+  const totalAttempts = totalSuccesses + totalFailures;
+  const successRatePercent = totalAttempts > 0 ? Math.round((totalSuccesses / totalAttempts) * 100) : 100;
+
+  const posts = usePostStore.getState().posts;
+  const pendingCount = posts.filter((p) => p.thumbnailStatus === "pending" || !p.thumbnailStatus).length;
+  const deadLetterCount = posts.filter((p) => p.thumbnailStatus === "failed" && (p.thumbnailAttempts || 0) >= 5).length;
+
+  const estimatedTimeRemainingSec = itemsPerSecond > 0 ? Math.ceil(pendingCount / itemsPerSecond) : 0;
+
+  return {
+    isRunning: isWorkerRunning,
+    isPaused,
+    speedMode,
+    currentConcurrency: currentActiveConcurrency,
+    itemsPerSecond,
+    avgLatencyMs,
+    successRatePercent,
+    estimatedTimeRemainingSec,
+    pendingCount,
+    deadLetterCount,
+    totalProcessed,
+    totalSuccesses,
+    totalFailures,
+  };
+}
+
+// Dynamic Adaptive Concurrency Calculator
+function calculateOptimalConcurrency(pendingCount: number): number {
+  if (speedMode === "eco") return 1;
+
+  // Network Information sensing
+  if (typeof navigator !== "undefined" && (navigator as any).connection) {
+    const conn = (navigator as any).connection;
+    if (conn.saveData || conn.effectiveType === "2g" || conn.effectiveType === "slow-2g") {
+      return 1;
+    }
+  }
+
+  // Calculate based on recent latencies & error rate
+  const recentErrors = totalFailures > 0 ? totalFailures / Math.max(1, totalSuccesses + totalFailures) : 0;
+  
+  let target = 3; // normal default
+  if (speedMode === "fast") target = 5;
+
+  if (recentErrors > 0.2) {
+    target = 1; // scale down on errors
+  } else if (recentLatenciesMs.length >= 5) {
+    const avgLat = recentLatenciesMs.reduce((a, b) => a + b, 0) / recentLatenciesMs.length;
+    if (avgLat < 600) {
+      target = Math.min(speedMode === "fast" ? 5 : 4, target + 1);
+    }
+  }
+
+  return Math.max(1, Math.min(target, pendingCount));
+}
+
+// Global UI Progress Callbacks
 const globalProgressCallbacks = new Set<() => void>();
 
 export function registerProgressCallback(callback: () => void) {
@@ -119,8 +222,8 @@ export async function purgeOldOrFailedStorage() {
         post.thumbnailStatus === "failed" &&
         (post.thumbnailAttempts || 0) >= 5
       ) {
-        if (post.visibility !== "hidden") {
-          const updatedVisibility = { visibility: "hidden" as const };
+        if (post.visibility !== "visible") {
+          const updatedVisibility = { visibility: "visible" as const };
           await db.posts.update(post.id, updatedVisibility);
           usePostStore.getState().updatePost(post.id, updatedVisibility);
         }
@@ -149,9 +252,6 @@ export async function purgeOldOrFailedStorage() {
 
     // Server-side Vacuum cleaner integration
     try {
-      console.log(
-        `[Storage Pruner] Triggering server-side vacuum of orphan thumbnail files...`,
-      );
       const activeIds = allPosts.map((p) => p.id);
       const vacuumResponse = await fetch("/api/vacuum-thumbnails", {
         method: "POST",
@@ -167,27 +267,22 @@ export async function purgeOldOrFailedStorage() {
         }
       }
     } catch (vacuumErr) {
-      console.warn(
-        `[Storage Pruner] Failed to run server-side vacuum:`,
-        vacuumErr,
-      );
+      console.warn(`[Storage Pruner] Server vacuum skipped:`, vacuumErr);
     }
 
     notifyUI();
   } catch (err) {
-    console.warn(
-      `[Storage Pruner] Error running IndexedDB storage pruner:`,
-      err,
-    );
+    console.warn(`[Storage Pruner] Error running pruner:`, err);
   }
 }
 
+// Exponential Backoff with Jitter for transient retries
 async function autoResetTransientFailures() {
   try {
     const allPosts = await db.posts.toArray();
-    const BASE_BACKOFF_MS = 15 * 1000; // 15 seconds base delay
-    const MAX_BACKOFF_MS = 15 * 60 * 1000; // 15 minutes maximum delay
-    const MAX_RETRIES = 5; // Allow up to 5 self-healing retry attempts
+    const BASE_BACKOFF_MS = 15 * 1000; // 15s base delay
+    const MAX_BACKOFF_MS = 15 * 60 * 1000; // 15m max delay
+    const MAX_RETRIES = 5;
     const now = Date.now();
 
     const postsToReset = allPosts.filter((p) => {
@@ -200,25 +295,20 @@ async function autoResetTransientFailures() {
           ? new Date(p.lastThumbnailAttempt).getTime()
           : 0;
 
-        // Exponential backoff: BASE_BACKOFF_MS * 2^(attempts - 1)
+        // Exponential backoff with randomized jitter (0.8x to 1.2x)
         const exp = BASE_BACKOFF_MS * Math.pow(2, Math.max(0, attempts - 1));
-        const backoffDelay = exp < MAX_BACKOFF_MS ? exp : MAX_BACKOFF_MS;
-        const elapsed = now - lastAttemptTime;
-        const isReady = elapsed > backoffDelay;
+        const rawBackoff = exp < MAX_BACKOFF_MS ? exp : MAX_BACKOFF_MS;
+        const jitteredBackoff = rawBackoff * (0.8 + Math.random() * 0.4);
 
-        if (isReady) {
-          console.log(
-            `[Thumbnail Worker Backoff] Post ${p.id} (Attempt ${attempts}/${MAX_RETRIES}) is ready for auto-retry. Backoff delay: ${backoffDelay / 1000}s, elapsed: ${Math.round(elapsed / 1000)}s.`,
-          );
-        }
-        return isReady;
+        const elapsed = now - lastAttemptTime;
+        return elapsed > jitteredBackoff;
       }
       return false;
     });
 
     if (postsToReset.length > 0) {
       console.log(
-        `[Thumbnail Worker] Auto-resetting ${postsToReset.length} transient failed thumbnails back to pending for retry under exponential backoff policy.`,
+        `[Thumbnail Worker] Auto-resetting ${postsToReset.length} transient failed thumbnails back to pending under jittered backoff policy.`,
       );
       for (const post of postsToReset) {
         const updatedFields = { thumbnailStatus: "pending" as const };
@@ -228,27 +318,49 @@ async function autoResetTransientFailures() {
       notifyUI();
     }
   } catch (err) {
-    console.warn(
-      `[Thumbnail Worker] Error auto-resetting failed thumbnails:`,
-      err,
-    );
+    console.warn(`[Thumbnail Worker] Error auto-resetting failed thumbnails:`, err);
   }
+}
+
+// Bulk reprocess Dead Letter Queue (DLQ)
+export async function reprocessDeadLetterQueue() {
+  const allPosts = await db.posts.toArray();
+  const deadLetterPosts = allPosts.filter(
+    (p) => p.thumbnailStatus === "failed" && (p.thumbnailAttempts || 0) >= 5
+  );
+
+  if (deadLetterPosts.length === 0) return 0;
+
+  for (const post of deadLetterPosts) {
+    const updated = {
+      thumbnailStatus: "pending" as const,
+      thumbnailAttempts: 0,
+    };
+    await db.posts.update(post.id, updated);
+    usePostStore.getState().updatePost(post.id, updated);
+  }
+
+  globalThrottleUntil = null;
+  isPaused = false;
+  notifyUI();
+  runThumbnailWorker();
+  return deadLetterPosts.length;
 }
 
 async function executeWorkerLoop() {
   try {
-    // Run storage pruning and self-healing transient resets once on worker startup
-    // to avoid excessive IndexedDB scans, store updates, and server API vacuum requests on every tick.
+    if (!workerStartTime) workerStartTime = Date.now();
     await purgeOldOrFailedStorage();
     await autoResetTransientFailures();
 
     while (!stopRequested) {
-      // Check if throttled globally
+      if (isPaused) {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+
       if (globalThrottleUntil && Date.now() < globalThrottleUntil) {
-        console.log(
-          `[Thumbnail Worker] Queue is currently rate limited. Sleeping for 10s.`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 10000));
+        await new Promise((r) => setTimeout(r, 5000));
         notifyUI();
         continue;
       }
@@ -259,8 +371,12 @@ async function executeWorkerLoop() {
         break;
       }
 
-      // Wait a bit before checking again
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Schedule next tick via requestIdleCallback if available for UI smoothness
+      if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+        await new Promise((resolve) => (window as any).requestIdleCallback(resolve, { timeout: 500 }));
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
     }
   } finally {
     isWorkerRunning = false;
@@ -269,7 +385,7 @@ async function executeWorkerLoop() {
 }
 
 export async function runThumbnailWorker() {
-  if (isWorkerRunning) return;
+  if (isWorkerRunning || isPaused) return;
   isWorkerRunning = true;
   stopRequested = false;
 
@@ -280,24 +396,14 @@ export async function runThumbnailWorker() {
         { ifAvailable: true },
         async (lock) => {
           if (!lock) {
-            console.log(
-              "[Thumbnail Worker] Another browser tab is active. Offloading background tasks to the primary worker.",
-            );
             isWorkerRunning = false;
             notifyUI();
             return;
           }
-          console.log(
-            "[Thumbnail Worker] Tab successfully elected as primary. Running worker loop.",
-          );
           await executeWorkerLoop();
         },
       );
     } catch (err) {
-      console.warn(
-        "[Thumbnail Worker] Lock request failed, falling back to standard execution:",
-        err,
-      );
       await executeWorkerLoop();
     }
   } else {
@@ -318,7 +424,7 @@ async function processQueue(): Promise<boolean> {
   const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
   const now = Date.now();
 
-  // Find pending posts, including cached images older than 30 days
+  // Multi-tier pending queue calculation
   const pendingPosts = allPostsInDb.filter((p) => {
     if (p.thumbnailStatus === "pending" || !p.thumbnailStatus) {
       return true;
@@ -327,9 +433,6 @@ async function processQueue(): Promise<boolean> {
     if (p.thumbnailStatus === "success" && p.lastThumbnailAttempt) {
       const lastAttemptTime = new Date(p.lastThumbnailAttempt).getTime();
       if (now - lastAttemptTime > THIRTY_DAYS_MS) {
-        console.log(
-          `[Thumbnail Worker Cache Invalidation] Post ${p.id} thumbnail was cached > 30 days ago. Re-scraping.`,
-        );
         return true;
       }
     }
@@ -340,48 +443,55 @@ async function processQueue(): Promise<boolean> {
     return false;
   }
 
-  // Priority Queue: Sort pendingPosts so that those currently in the viewport (visible) are processed first
+  // Multi-Tier Priority Sort:
+  // Tier 1 (Highest): Viewport visible items
+  // Tier 2 (Medium): Recently added posts (< 15 mins old)
+  // Tier 3 (Low): Historical background items
   pendingPosts.sort((a, b) => {
     const aVisible = visiblePostIdsSet.has(a.id);
     const bVisible = visiblePostIdsSet.has(b.id);
     if (aVisible && !bVisible) return -1;
     if (!aVisible && bVisible) return 1;
+
+    const aAge = a.savedAt ? now - new Date(a.savedAt).getTime() : 0;
+    const bAge = b.savedAt ? now - new Date(b.savedAt).getTime() : 0;
+    const FIFTEEN_MINS = 15 * 60 * 1000;
+
+    const aRecent = aAge < FIFTEEN_MINS;
+    const bRecent = bAge < FIFTEEN_MINS;
+    if (aRecent && !bRecent) return -1;
+    if (!aRecent && bRecent) return 1;
+
     return 0;
   });
 
-  const visibleCount = pendingPosts.filter((p) => visiblePostIdsSet.has(p.id)).length;
-  if (visibleCount > 0) {
-    console.log(
-      `[Thumbnail Worker Queue] Priority Queue active: prioritized ${visibleCount} visible pending posts at the front of the queue.`
-    );
-  }
+  // Calculate dynamic adaptive concurrency
+  const concurrency = calculateOptimalConcurrency(pendingPosts.length);
+  currentActiveConcurrency = concurrency;
 
-  const CONCURRENCY = 1; // Concurrency control: reduced to 1 to prevent concurrent requests triggering Instagram 429 rate limiting
   let index = 0;
-
-  const count =
-    CONCURRENCY < pendingPosts.length ? CONCURRENCY : pendingPosts.length;
-  const workers = Array(count)
+  const workers = Array(concurrency)
     .fill(null)
     .map(async () => {
-      while (index < pendingPosts.length && !stopRequested) {
-        // If throttled during processing, stop processing more items in this chunk
-        if (globalThrottleUntil && Date.now() < globalThrottleUntil) {
-          break;
-        }
+      while (index < pendingPosts.length && !stopRequested && !isPaused) {
+        if (globalThrottleUntil && Date.now() < globalThrottleUntil) break;
+
         const post = pendingPosts[index++];
         if (post) {
           try {
-            await fetchThumbnailForPost(post);
-            // Stagger requests with a 1.5s - 2.5s delay to avoid triggering Instagram's public rate limits
-            if (index < pendingPosts.length && !stopRequested) {
-              await new Promise((resolve) => setTimeout(resolve, 1500 + Math.random() * 1000));
+            await fetchThumbnailForPostDeduplicated(post);
+            
+            // Stagger delay based on speedMode and visibility
+            const isVisible = visiblePostIdsSet.has(post.id);
+            let delay = isVisible ? 0 : 150;
+            if (speedMode === "eco") delay = 400;
+            if (speedMode === "fast" && isVisible) delay = 0;
+
+            if (delay > 0 && !stopRequested) {
+              await new Promise((r) => setTimeout(r, delay));
             }
           } catch (workerErr) {
-            console.error(
-              `[Thumbnail Worker Queue] Failed to process post ${post.id}:`,
-              workerErr,
-            );
+            console.error(`[Thumbnail Worker Queue] Error processing ${post.id}:`, workerErr);
           }
         }
       }
@@ -390,32 +500,34 @@ async function processQueue(): Promise<boolean> {
   await Promise.all(workers);
 
   if (globalThrottleUntil && Date.now() < globalThrottleUntil) {
-    return true; // we still have pending items, just throttled
+    return true;
   }
 
-  // Re-check pending posts
-  const remainingPostsInDb = await db.posts.toArray();
-  const stillPending = remainingPostsInDb.filter((p) => {
-    if (p.thumbnailStatus === "pending" || !p.thumbnailStatus) return true;
-    if (p.thumbnailStatus === "success" && p.lastThumbnailAttempt) {
-      const lastAttemptTime = new Date(p.lastThumbnailAttempt).getTime();
-      if (now - lastAttemptTime > THIRTY_DAYS_MS) return true;
-    }
-    return false;
-  });
-
+  const remainingInDb = await db.posts.toArray();
+  const stillPending = remainingInDb.filter((p) => p.thumbnailStatus === "pending" || !p.thumbnailStatus);
   return stillPending.length > 0;
 }
 
-async function fetchThumbnailForPost(post: Post) {
+// In-Flight Request Merging & Deduplication Wrapper
+async function fetchThumbnailForPostDeduplicated(post: Post): Promise<void> {
+  if (inFlightRequestsMap.has(post.id)) {
+    return inFlightRequestsMap.get(post.id)!;
+  }
+
+  const requestPromise = fetchThumbnailForPostInternal(post).finally(() => {
+    inFlightRequestsMap.delete(post.id);
+  });
+
+  inFlightRequestsMap.set(post.id, requestPromise);
+  return requestPromise;
+}
+
+async function fetchThumbnailForPostInternal(post: Post) {
   const cleanUrl = (post.postUrl || "").trim();
   let isUrlValid = false;
 
   try {
-    if (
-      cleanUrl &&
-      (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://"))
-    ) {
+    if (cleanUrl && (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://"))) {
       new URL(cleanUrl);
       isUrlValid = true;
     }
@@ -424,9 +536,6 @@ async function fetchThumbnailForPost(post: Post) {
   }
 
   if (!isUrlValid) {
-    console.warn(
-      `[Thumbnail Worker] Skipping malformed/invalid URL for post ${post.id}: "${cleanUrl}"`,
-    );
     const updatedPost: Partial<Post> = {
       thumbnailStatus: "success",
       lastThumbnailAttempt: new Date(),
@@ -440,23 +549,13 @@ async function fetchThumbnailForPost(post: Post) {
   const attempts = (post.thumbnailAttempts || 0) + 1;
   const MAX_RETRIES = 5;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    console.warn(
-      `[Thumbnail Worker] Timeout exceeded (12s threshold) fetching thumbnail for post ${post.id}`,
-    );
-    controller.abort();
-  }, 12000); // 12 seconds request timeout
+  const timeoutId = setTimeout(() => controller.abort(), 6000);
 
   const startTime = Date.now();
   try {
-    console.log(
-      `[Thumbnail Worker Client] [Attempt #${attempts}/${MAX_RETRIES}] Triggering server-side fetch-thumbnail for post ${post.id}. URL: ${post.postUrl}`,
-    );
     const response = await fetch("/api/fetch-thumbnail", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         url: post.postUrl,
         id: post.id,
@@ -468,15 +567,15 @@ async function fetchThumbnailForPost(post: Post) {
     clearTimeout(timeoutId);
     const duration = Date.now() - startTime;
 
-    // Detect 429 Rate limits globally
-    if (response.status === 429) {
-      const cooldown = 5 * 60 * 1000; // 5 mins cooldown
-      globalThrottleUntil = Date.now() + cooldown;
-      console.warn(
-        `[Thumbnail Worker Client] Global 429 Rate Limiting detected for post ${post.id}. Throttling queue for 5 minutes.`,
-      );
+    // Track latency telemetry
+    recentLatenciesMs.push(duration);
+    if (recentLatenciesMs.length > 20) recentLatenciesMs.shift();
+    totalProcessed++;
 
-      // Leave post as pending so it can be retried once cooldown finishes
+    if (response.status === 429) {
+      const cooldown = 5 * 60 * 1000;
+      globalThrottleUntil = Date.now() + cooldown;
+
       const updatedPost: Partial<Post> = {
         thumbnailStatus: "pending",
         lastThumbnailAttempt: new Date(),
@@ -488,18 +587,13 @@ async function fetchThumbnailForPost(post: Post) {
     }
 
     if (!response.ok) {
-      throw new Error(
-        `Server returned HTTP Error Status ${response.status}: ${response.statusText || "Unknown Error"}`,
-      );
+      throw new Error(`Server returned HTTP Error Status ${response.status}`);
     }
 
     const data = await response.json();
 
     if (data.success && data.path) {
-      console.log(
-        `[Thumbnail Worker Client] [SUCCESS] Fetch thumbnail succeeded for post ${post.id} (Attempt ${attempts}/${MAX_RETRIES}).`,
-      );
-
+      totalSuccesses++;
       const updatedPost: Partial<Post> = {
         thumbnailUrl: data.path,
         thumbnailStatus: "success",
@@ -525,15 +619,12 @@ async function fetchThumbnailForPost(post: Post) {
       await db.posts.update(post.id, updatedPost);
       usePostStore.getState().updatePost(post.id, updatedPost);
     } else {
-      console.warn(
-        `[Thumbnail Worker Client] [UNRESOLVED] Server returned success=false for post ${post.id} (Attempt ${attempts}/${MAX_RETRIES}).`,
-      );
-
+      totalFailures++;
       const updatedPost: Partial<Post> = {
         thumbnailStatus: "failed",
         thumbnailAttempts: attempts,
         lastThumbnailAttempt: new Date(),
-        ...(attempts >= MAX_RETRIES ? { visibility: "hidden" as const } : {})
+        visibility: "visible",
       };
 
       await db.posts.update(post.id, updatedPost);
@@ -541,21 +632,12 @@ async function fetchThumbnailForPost(post: Post) {
     }
   } catch (error: any) {
     clearTimeout(timeoutId);
-    const duration = Date.now() - startTime;
-    const isAbort = error.name === "AbortError";
-    const errMsg = isAbort
-      ? "Request timed-out (12s threshold)"
-      : error.message || "Unknown network error";
-
-    console.warn(
-      `[Thumbnail Worker Client] [DIAGNOSTICS] Fetch unresolved for post ${post.id}: ${errMsg}`,
-    );
-
+    totalFailures++;
     const updatedPost: Partial<Post> = {
       thumbnailStatus: "failed",
       thumbnailAttempts: attempts,
       lastThumbnailAttempt: new Date(),
-      ...(attempts >= MAX_RETRIES ? { visibility: "hidden" as const } : {})
+      visibility: "visible",
     };
 
     await db.posts.update(post.id, updatedPost);
@@ -565,31 +647,26 @@ async function fetchThumbnailForPost(post: Post) {
   }
 }
 
-// User-triggered: Retry failed posts
+// User-triggered: Retry all failed posts
 export async function retryFailedThumbnails() {
   const allPostsInDb = await db.posts.toArray();
   const failedPosts = allPostsInDb.filter(
     (p) => !p.id.startsWith("sample-") && p.thumbnailStatus === "failed",
   );
 
-  console.log(
-    `[Thumbnail Worker Client] Retrying all (${failedPosts.length}) failed thumbnails`,
-  );
-
   for (const post of failedPosts) {
     const cleanUrl = (post.postUrl || "").trim();
-    const isHttp =
-      cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://");
+    const isHttp = cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://");
     const updatedPost: Partial<Post> = {
       thumbnailStatus: isHttp ? "pending" : "success",
-      thumbnailAttempts: 0, // Reset attempt counts so it starts fresh!
+      thumbnailAttempts: 0,
     };
     await db.posts.update(post.id, updatedPost);
     usePostStore.getState().updatePost(post.id, updatedPost);
   }
 
-  // Lift global throttle on manual retry
   globalThrottleUntil = null;
+  isPaused = false;
   notifyUI();
   runThumbnailWorker();
 }
@@ -598,24 +675,21 @@ export async function retryFailedThumbnails() {
 export async function retrySingleThumbnail(postId: string) {
   const post = await db.posts.get(postId);
   if (post) {
-    console.log(
-      `[Thumbnail Worker Client] Manually triggering single thumbnail retry for post: ${postId}`,
-    );
     const updatedPost: Partial<Post> = {
       thumbnailStatus: "pending",
-      thumbnailAttempts: 0, // Reset attempt counts
+      thumbnailAttempts: 0,
     };
     await db.posts.update(postId, updatedPost);
     usePostStore.getState().updatePost(postId, updatedPost);
 
-    // Lift global throttle on manual retry
     globalThrottleUntil = null;
+    isPaused = false;
     notifyUI();
     runThumbnailWorker();
   }
 }
 
-// Background Offloader: Offload all pending extraction tasks to server-side background scraper
+// Background Offloader: Offload all pending extraction tasks to server
 export async function offloadPendingToBackgroundServer(): Promise<number> {
   try {
     const allPosts = await db.posts.toArray();
@@ -631,7 +705,6 @@ export async function offloadPendingToBackgroundServer(): Promise<number> {
       mediaType: p.mediaType,
     }));
 
-    // 1. Send keepalive fetch to server
     if (typeof fetch !== "undefined") {
       fetch("/api/queue-background-scrape", {
         method: "POST",
@@ -641,29 +714,13 @@ export async function offloadPendingToBackgroundServer(): Promise<number> {
       }).catch((err) => console.warn("[Background Offloader] Fetch offload error:", err));
     }
 
-    // 2. Delegate to Service Worker
     if (typeof navigator !== "undefined" && navigator.serviceWorker && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
         type: "OFFLOAD_BACKGROUND_QUEUE",
         posts: payload,
       });
-
-      // Register PWA Sync tags
-      if ("ready" in navigator.serviceWorker) {
-        navigator.serviceWorker.ready.then((reg: any) => {
-          if (reg.sync) {
-            reg.sync.register("background-sync-thumbnails").catch(() => {});
-          }
-          if (reg.periodicSync) {
-            reg.periodicSync.register("periodic-thumbnail-scrape", {
-              minInterval: 15 * 60 * 1000,
-            }).catch(() => {});
-          }
-        });
-      }
     }
 
-    console.log(`[Background Offloader] Successfully offloaded ${pendingPosts.length} posts to server background queue.`);
     return pendingPosts.length;
   } catch (err) {
     console.warn("[Background Offloader] Failed to offload pending queue:", err);
@@ -671,19 +728,26 @@ export async function offloadPendingToBackgroundServer(): Promise<number> {
   }
 }
 
-// Auto-register lifecycle listeners so background extraction runs seamlessly when tab is hidden or closed
+// Auto-register lifecycle listeners
 if (typeof window !== "undefined" && typeof document !== "undefined") {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
-      console.log("[Background Worker] Page hidden — offloading pending queue to server background scraper...");
       offloadPendingToBackgroundServer();
     } else if (document.visibilityState === "visible") {
-      console.log("[Background Worker] Page visible — resuming client queue worker...");
+      isPaused = false;
       runThumbnailWorker();
     }
   });
 
   window.addEventListener("pagehide", () => {
     offloadPendingToBackgroundServer();
+  });
+
+  window.addEventListener("online", () => {
+    console.log("[Thumbnail Worker] Network reconnected — lifting throttles and resuming queue processing.");
+    globalThrottleUntil = null;
+    isPaused = false;
+    notifyUI();
+    runThumbnailWorker();
   });
 }

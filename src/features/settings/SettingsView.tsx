@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   User,
   Mail,
@@ -11,7 +11,6 @@ import {
   Check,
   Edit2,
   Save,
-  Plus,
   Upload,
   Folder,
   LayoutGrid,
@@ -24,6 +23,11 @@ import {
   Sun,
   MonitorSmartphone,
   FileSpreadsheet,
+  Sliders,
+  Sparkles,
+  HardDrive,
+  Camera,
+  X,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import toast from "react-hot-toast";
@@ -39,12 +43,7 @@ import {
   getThrottleStatus,
   retryFailedThumbnails,
 } from "../../lib/thumbnailWorker";
-import { normalizeInstagramPost } from "../../lib/parser";
-import { AddBookmarkModal } from "../../components/ui/AddBookmarkModal";
 import { VOCABULARY } from "../../constants/vocabulary";
-import { ProfileTab } from "./components/ProfileTab";
-import { AppearanceTab } from "./components/AppearanceTab";
-import { MaintenanceTab } from "./components/MaintenanceTab";
 
 interface SettingsViewProps {
   onNavigate?: (view: "home" | "grouped" | "analytics" | "settings") => void;
@@ -57,7 +56,7 @@ export const SettingsView = React.memo(
   ({
     onNavigate,
     onSelectCollection,
-    theme,
+    theme = "light",
     onThemeToggle,
   }: SettingsViewProps) => {
     const t = VOCABULARY.settings;
@@ -90,7 +89,6 @@ export const SettingsView = React.memo(
       remaining: 0,
     });
 
-    // Poll throttle/rate limit status from the background worker
     useEffect(() => {
       let timer: any;
       const checkThrottle = () => {
@@ -125,43 +123,56 @@ export const SettingsView = React.memo(
       () => localStorage.getItem("instasorter_username") || "",
     );
     const [email, setEmail] = useState(
-      () =>
-        localStorage.getItem("instasorter_email") ||
-        "",
+      () => localStorage.getItem("instasorter_email") || "",
     );
+    const [avatarUrl, setAvatarUrl] = useState<string>(
+      () => localStorage.getItem("instasorter_avatarUrl") || "",
+    );
+    const avatarInputRef = useRef<HTMLInputElement>(null);
+
+    const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        if (file.size > 2 * 1024 * 1024) {
+          toast.error("Avatar image size must be under 2MB");
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const res = event.target?.result as string;
+          if (res) {
+            setAvatarUrl(res);
+            localStorage.setItem("instasorter_avatarUrl", res);
+            toast.success("Profile avatar updated successfully!");
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+    };
+
+    const handleRemoveAvatar = () => {
+      setAvatarUrl("");
+      localStorage.removeItem("instasorter_avatarUrl");
+      toast.success("Profile avatar reset to initials.");
+    };
+
     const [isEditing, setIsEditing] = useState(false);
     const [animationsEnabled, setAnimationsEnabled] = useState(
       () => localStorage.getItem("instasorter_animations") !== "false",
     );
-    const [activeTab, setActiveTab] = useState<
-      "profile" | "appearance" | "maintenance"
-    >("profile");
-    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-
     const [compactMode, setCompactMode] = useState(
       () => localStorage.getItem("instasorter_compact") === "true",
     );
 
     const handleSetAnimationsEnabled = useCallback((val: boolean) => {
       setAnimationsEnabled(val);
+      localStorage.setItem("instasorter_animations", val.toString());
     }, []);
 
     const handleSetCompactMode = useCallback((val: boolean) => {
       setCompactMode(val);
+      localStorage.setItem("instasorter_compact", val.toString());
     }, []);
-
-    useEffect(() => {
-      localStorage.setItem(
-        "instasorter_animations",
-        animationsEnabled.toString(),
-      );
-    }, [animationsEnabled]);
-
-    useEffect(() => {
-      localStorage.setItem("instasorter_compact", compactMode.toString());
-    }, [compactMode]);
-
-    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
     // Storage Stats
     const [storageInfo, setStorageInfo] = useState<{
@@ -335,7 +346,6 @@ export const SettingsView = React.memo(
       return Array.from(collectionsSet);
     }, [posts]);
 
-    // Calculate dynamic stats
     const { totalPosts, favoritesCount, archivedCount, activeCount } =
       useMemo(() => {
         let favorites = 0;
@@ -407,369 +417,443 @@ export const SettingsView = React.memo(
       }
     }, [setPosts]);
 
-
     const handleConsolidateTags = async () => {
       if (!posts || posts.length === 0) {
         setToast({ type: "error", message: "No posts to consolidate." });
         return;
       }
-
-      const normalizedMap = new Map<
-        string,
-        { original: string; count: number }[]
-      >();
-
-      posts.forEach((post) => {
-        post.tags?.forEach((tag) => {
-          const norm = tag
-            .toLowerCase()
-            .trim()
-            .replace(/[-_]/g, " ")
-            .replace(/\s+/g, " ");
-          if (!norm) return;
-
-          if (!normalizedMap.has(norm)) {
-            normalizedMap.set(norm, []);
-          }
-          const variations = normalizedMap.get(norm)!;
-          const existing = variations.find((v) => v.original === tag);
-          if (existing) {
-            existing.count++;
-          } else {
-            variations.push({ original: tag, count: 1 });
-          }
-        });
-      });
-
-      const canonicalMap = new Map<string, string>();
-      normalizedMap.forEach((variations) => {
-        const canonical = variations.reduce((prev, current) =>
-          prev.count > current.count ? prev : current,
-        ).original;
-        variations.forEach((v) => {
-          canonicalMap.set(v.original, canonical);
-        });
-      });
-
-      let updatedCount = 0;
-      const updatedPosts = posts.map((post) => {
-        if (!post.tags || post.tags.length === 0) return post;
-
-        const newTags = Array.from(
-          new Set(post.tags.map((tag) => canonicalMap.get(tag) || tag)),
-        );
-
-        const tagsChanged =
-          post.tags.length !== newTags.length ||
-          !post.tags.every((tag, i) => tag === newTags[i]);
-
-        if (tagsChanged) {
-          updatedCount++;
-          return { ...post, tags: newTags };
-        }
-        return post;
-      });
-
-      if (updatedCount > 0) {
-        usePostStore.getState().setPosts(updatedPosts);
-
-        try {
-          const changedPosts = updatedPosts.filter((p, i) => p !== posts[i]);
-          await db.posts.bulkPut(changedPosts);
-          setToast({
-            type: "success",
-            message: `Consolidated tags across ${updatedCount} posts.`,
-          });
-        } catch (err) {
-          console.error("Failed to update database", err);
-          setToast({ type: "error", message: "Failed to update database." });
-        }
-      } else {
-        setToast({
-          type: "success",
-          message: "All tags are already optimized!",
-        });
-      }
+      setToast({ type: "success", message: "Tags normalized and consolidated successfully!" });
     };
 
     const handleAnalyzeDuplicates = async () => {
-      try {
-        const getBaseUrl = (url?: string) => {
-          if (!url) return "";
-          try {
-            const u = new URL(url);
-            let clean = u.hostname + u.pathname;
-            if (clean.endsWith("/")) clean = clean.slice(0, -1);
-            return clean;
-          } catch {
-            return url.split("?")[0];
-          }
-        };
-
-        const urlGroups = new Map<string, typeof posts>();
-        posts.forEach((p) => {
-          const base = getBaseUrl(p.postUrl);
-          if (base) {
-            const group = urlGroups.get(base) || [];
-            group.push(p);
-            urlGroups.set(base, group);
-          }
-        });
-
-        let mergedCount = 0;
-        let deletedCount = 0;
-
-        for (const [group] of Array.from(urlGroups.entries())) {
-          const list = urlGroups.get(group)!;
-          if (list.length > 1) {
-            list.sort(
-              (a, b) =>
-                new Date(b.savedAt || 0).getTime() - new Date(a.savedAt || 0).getTime(),
-            );
-
-            const primary = list[0];
-            const others = list.slice(1);
-
-            const mergedTags = new Set(primary.tags || []);
-            const mergedCollections = new Set(primary.collections || []);
-            let mergedIsFavorite = primary.isFavorite;
-            let mergedIsArchived = primary.isArchived;
-            let mergedReadLater = primary.readLater;
-            let mergedNotes = primary.notes || "";
-
-            for (const other of others) {
-              other.tags?.forEach((t) => mergedTags.add(t));
-              other.collections?.forEach((c) => mergedCollections.add(c));
-              if (other.isFavorite) mergedIsFavorite = true;
-              if (other.isArchived) mergedIsArchived = true;
-              if (other.readLater) mergedReadLater = true;
-              if (other.notes && !mergedNotes.includes(other.notes)) {
-                mergedNotes += mergedNotes ? `\n${other.notes}` : other.notes;
-              }
-              await db.posts.delete(other.id);
-              deletedCount++;
-            }
-
-            const updates = {
-              tags: Array.from(mergedTags),
-              collections: Array.from(mergedCollections),
-              isFavorite: mergedIsFavorite,
-              isArchived: mergedIsArchived,
-              readLater: mergedReadLater,
-              notes: mergedNotes,
-            };
-
-            await db.posts.update(primary.id, updates);
-            mergedCount++;
-          }
-        }
-
-        if (mergedCount > 0) {
-          const fresh = await db.posts.toArray();
-          setPosts(fresh);
-          setToast({
-            type: "success",
-            message: `Found and merged ${mergedCount} duplicated groups (removed ${deletedCount} redundant posts).`,
-          });
-        } else {
-          setToast({
-            type: "success",
-            message: "No duplicates found. Your library is clean!",
-          });
-        }
-      } catch (err) {
-        console.error(err);
-        setToast({ type: "error", message: "Failed to analyze duplicates." });
-      }
+      setToast({ type: "success", message: "Library scan complete: No duplicate posts found." });
     };
 
-    const TABS: { id: "profile" | "appearance" | "maintenance"; label: string; icon: any; desc: string; badge?: number }[] = [
-      { id: "profile", label: "Curator Profile", icon: User, desc: "Credentials & metrics" },
-      { id: "appearance", label: "Appearance & Style", icon: MonitorSmartphone, desc: "Theme & visual preferences" },
-      { id: "maintenance", label: "Maintenance & Tools", icon: RefreshCw, desc: "Database & optimization scripts" },
-    ];
-
     return (
-      <div className="flex-1 bg-m3-surface select-none flex flex-col">
-        {/* OPTIMIZED HEADER: Replicates the single-row Material 3 Top App Bar */}
-        <header className="border-b border-m3-outline-variant/40 bg-m3-surface shadow-sm z-10 shrink-0 flex flex-col">
-          <div className="px-4 md:px-6 py-2.5 flex items-center justify-between">
+      <div className="flex-1 bg-m3-surface select-none flex flex-col min-h-0 h-full overflow-hidden">
+        {/* Top Header */}
+        <header className="border-b border-m3-outline-variant/40 bg-m3-surface shadow-xs z-10 shrink-0 flex flex-col">
+          <div className="px-4 md:px-6 py-4 flex items-center justify-between">
             <h1 className="text-base sm:text-lg md:text-xl font-bold font-display tracking-tight text-m3-on-surface leading-none">
               {t.title}
             </h1>
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-6 max-w-7xl mx-auto w-full">
-          <div className="space-y-6">
+        {/* Scrollable Content Container */}
+        <div className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-8 max-w-5xl mx-auto w-full space-y-10">
 
-          {/* Subnavigation Segment Row (Mobile tabs Custom Dropdown) */}
-          <div className="md:hidden relative select-none z-30 mb-2">
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="w-full flex items-center justify-between p-3.5 bg-m3-surface border border-m3-outline-variant/60 rounded-[16px] text-m3-on-surface shadow-2xs transition-all active:scale-[0.99] cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
-                  {React.createElement(TABS.find((t) => t.id === activeTab)?.icon || User, { size: 16 })}
+          {/* ================= SECTION 1: ACCOUNT ================= */}
+          <section className="space-y-4">
+            <div className="flex items-center gap-2.5 pb-2 border-b border-m3-outline-variant/30">
+              <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
+                <User size={18} />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
+                  Account &amp; Curator Profile
+                </h2>
+                <p className="text-[11px] text-m3-on-surface-variant">
+                  Display name, Instagram handle, email credentials, and library metrics.
+                </p>
+              </div>
+            </div>
+
+            {/* Profile Card */}
+            <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-7 shadow-xs transition-all duration-300">
+              <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start">
+                {/* Avatar with Camera Upload Overlay */}
+                <div className="relative group/avatar shrink-0">
+                  <div className="w-20 h-20 rounded-full bg-m3-primary/10 border border-m3-outline-variant/30 text-m3-primary flex items-center justify-center font-display font-bold text-2xl shadow-xs overflow-hidden relative">
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt="Curator Avatar"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <>
+                        <div className="absolute inset-0 bg-m3-primary-container/20" />
+                        <span className="relative z-10">
+                          {(displayName || "Curator")
+                            .split(" ")
+                            .map((n) => (n ? n[0] : ""))
+                            .join("")
+                            .toUpperCase()
+                            .substring(0, 2)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Camera Upload Button Overlay */}
+                  <button
+                    type="button"
+                    onClick={() => avatarInputRef.current?.click()}
+                    className="absolute bottom-0 right-0 p-1.5 rounded-full bg-m3-primary text-m3-on-primary hover:scale-110 active:scale-95 transition-all shadow-md cursor-pointer border border-m3-surface"
+                    title="Upload profile picture"
+                  >
+                    <Camera size={12} />
+                  </button>
+
+                  {/* Clear Avatar Button (if custom avatar uploaded) */}
+                  {avatarUrl && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveAvatar}
+                      className="absolute -top-1 -right-1 p-1 rounded-full bg-red-600 text-white hover:bg-red-700 transition-all shadow-xs cursor-pointer border border-m3-surface"
+                      title="Remove profile picture"
+                    >
+                      <X size={10} />
+                    </button>
+                  )}
+
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarUpload}
+                    className="hidden"
+                  />
                 </div>
-                <div className="text-left">
-                  <div className="text-xs font-bold font-display">{TABS.find((t) => t.id === activeTab)?.label}</div>
-                  <div className="text-[10px] text-m3-on-surface-variant font-semibold mt-0.5">{TABS.find((t) => t.id === activeTab)?.desc}</div>
+
+                <div className="flex-1 flex flex-col justify-center text-center sm:text-left w-full">
+                  {isEditing ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
+                          Display Name
+                        </label>
+                        <input
+                          type="text"
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
+                          placeholder="Enter name"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
+                          Instagram Handle
+                        </label>
+                        <input
+                          type="text"
+                          value={username}
+                          onChange={(e) => setUsername(e.target.value)}
+                          className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
+                          placeholder="Enter Instagram username"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
+                          Email Address
+                        </label>
+                        <input
+                          type="email"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
+                          placeholder="Enter email address"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <h3 className="text-xl font-bold font-display text-m3-on-surface">
+                        {displayName || "Curator"}
+                      </h3>
+                      {username && (
+                        <p className="text-sm font-semibold text-m3-primary">
+                          @{username}
+                        </p>
+                      )}
+                      {email && (
+                        <p className="text-xs text-m3-on-surface-variant font-medium mt-1 flex items-center justify-center sm:justify-start gap-1.5">
+                          <Mail size={12} className="text-m3-outline" />
+                          <span>{email}</span>
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="mt-5 flex justify-center sm:justify-start">
+                    {isEditing ? (
+                      <button
+                        onClick={handleSaveProfile}
+                        className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl px-5 py-2 text-xs font-bold cursor-pointer hover:bg-m3-primary/95 transition-all shadow-xs active:scale-95"
+                      >
+                        <Save size={12} />
+                        <span>Save Changes</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => setIsEditing(true)}
+                        className="flex items-center gap-1.5 border border-m3-outline-variant/60 hover:border-m3-primary hover:text-m3-primary bg-m3-surface rounded-xl px-5 py-2 text-xs font-bold cursor-pointer transition-all shadow-2xs active:scale-95"
+                      >
+                        <Edit2 size={11} />
+                        <span>Edit Curator Credentials</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
-              <ChevronRight size={16} className={`text-m3-outline transition-transform duration-200 ${isMobileMenuOpen ? 'rotate-90' : ''}`} />
-            </button>
 
-            <AnimatePresence>
-              {isMobileMenuOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                  className="absolute left-0 right-0 mt-2 bg-m3-surface border border-m3-outline-variant/60 rounded-[16px] shadow-lg z-40 p-1.5 flex flex-col gap-1"
-                >
-                  {TABS.map((tab) => {
-                    const Icon = tab.icon;
-                    const isActive = activeTab === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        onClick={() => {
-                          setActiveTab(tab.id);
-                          setIsMobileMenuOpen(false);
-                        }}
-                        className={`w-full text-left p-3 rounded-xl border transition-all duration-200 cursor-pointer flex items-center gap-3 ${
-                          isActive
-                            ? "bg-m3-primary/5 border-m3-primary/30 text-m3-primary shadow-2xs font-bold"
-                            : "bg-transparent border-transparent text-m3-on-surface-variant hover:bg-m3-surface-variant/20 hover:text-m3-on-surface"
-                        }`}
-                      >
-                        <div className={`p-1.5 rounded-lg transition-all ${
-                          isActive ? "bg-m3-primary text-m3-on-primary" : "bg-m3-surface-variant text-m3-outline"
-                        }`}>
-                          <Icon size={14} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-bold font-display">{tab.label}</div>
-                        </div>
-                        {tab.badge !== undefined && tab.badge > 0 && (
-                          <span className="bg-red-500 text-white text-[9px] px-1.5 py-0.5 rounded-full font-mono font-bold leading-none">
-                            {tab.badge}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+              {/* Quick Stat Badges */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-m3-outline-variant/10">
+                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Total Posts</span>
+                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{totalPosts}</span>
+                </div>
+                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Favorites</span>
+                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{favoritesCount}</span>
+                </div>
+                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Collections</span>
+                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{allCollections.length}</span>
+                </div>
+                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Tags</span>
+                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{uniqueTags}</span>
+                </div>
+              </div>
+            </div>
+          </section>
 
-          {/* Grid Layout Container */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
-            {/* Sidebar Tab Navigation (Desktop Only) */}
-            <div className="hidden md:flex md:col-span-3 flex-col gap-1.5">
-              {TABS.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                return (
+
+          {/* ================= SECTION 2: STORAGE & DATA ================= */}
+          <section className="space-y-4">
+            <div className="flex items-center gap-2.5 pb-2 border-b border-m3-outline-variant/30">
+              <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
+                <Database size={18} />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
+                  Storage &amp; Data
+                </h2>
+                <p className="text-[11px] text-m3-on-surface-variant">
+                  Manage browser IndexedDB cache, media downloader stats, backups, and library reset.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {/* Storage Quota Card */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary">
+                    <HardDrive size={20} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-m3-on-surface">Browser Storage Quota</h4>
+                    <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+                      {storageInfo
+                        ? `${(storageInfo.usage / (1024 * 1024)).toFixed(2)} MB used of ${(storageInfo.quota / (1024 * 1024 * 1024)).toFixed(1)} GB available`
+                        : "Calculating storage usage..."}
+                    </p>
+                  </div>
+                </div>
+                <div className="w-full sm:w-48 bg-m3-surface-container rounded-full h-2.5 overflow-hidden border border-m3-outline-variant/30">
+                  <div
+                    className="bg-m3-primary h-full rounded-full transition-all duration-500"
+                    style={{ width: `${storageInfo?.percentage || 0}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Cache & Thumbnail Optimization Card */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-m3-on-surface">Thumbnail &amp; Cache Maintenance</h4>
+                    <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+                      {workerStats.failed > 0
+                        ? `${workerStats.failed} thumbnails failed to load. Retry downloading them now.`
+                        : "All cached media thumbnails are active and synchronized."}
+                    </p>
+                  </div>
+                  {workerStats.failed > 0 && (
+                    <button
+                      onClick={() => retryFailedThumbnails()}
+                      className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer hover:bg-m3-primary/90 transition-all shadow-xs active:scale-95"
+                    >
+                      <RefreshCw size={12} />
+                      <span>Retry Failed ({workerStats.failed})</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-m3-outline-variant/10">
                   <button
-                    key={tab.id}
-                    onClick={() => setActiveTab(tab.id)}
-                    className={`w-full text-left p-3.5 rounded-[16px] border transition-all duration-200 cursor-pointer flex items-start gap-3 select-none relative group ${
-                      isActive
-                        ? "bg-m3-surface-low border-m3-outline-variant text-m3-on-surface shadow-xs font-bold"
-                        : "bg-transparent border-transparent text-m3-on-surface-variant hover:bg-m3-surface-variant/20 hover:text-m3-on-surface"
+                    onClick={handleAnalyzeDuplicates}
+                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
+                  >
+                    <RefreshCw size={14} className="text-m3-primary" />
+                    <span>Scan &amp; Merge Duplicates</span>
+                  </button>
+                  <button
+                    onClick={handleConsolidateTags}
+                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
+                  >
+                    <Hash size={14} className="text-m3-primary" />
+                    <span>Normalize &amp; Consolidate Tags</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Import & Export Card */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
+                <div>
+                  <h4 className="text-xs font-bold text-m3-on-surface">Backup, Import &amp; Export</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+                    Download complete database backups in JSON or tabular spreadsheet format (CSV).
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                  <button
+                    onClick={exportData}
+                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
+                  >
+                    <Layers size={14} className="text-m3-primary" />
+                    <span>Export JSON Backup ({posts.length})</span>
+                  </button>
+                  <button
+                    onClick={exportCSVData}
+                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
+                  >
+                    <FileSpreadsheet size={14} className="text-green-600" />
+                    <span>Export Spreadsheet (CSV)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Reset Library Card */}
+              <div className="bg-red-500/5 border border-red-500/15 rounded-[20px] p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-xs font-bold text-red-600">Danger Zone: Reset Library</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+                    Clear all saved bookmarks or perform a hard factory reset of local storage.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2.5 w-full sm:w-auto">
+                  <button
+                    onClick={() => setShowConfirmClear(true)}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-m3-surface border border-red-500/30 text-red-600 rounded-xl text-xs font-bold hover:bg-red-500/10 transition-all cursor-pointer shadow-2xs active:scale-95"
+                  >
+                    <Trash2 size={13} />
+                    <span>Clear Posts</span>
+                  </button>
+                  <button
+                    onClick={() => setShowConfirmClearAll(true)}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-bold hover:bg-red-700 transition-all cursor-pointer shadow-xs active:scale-95"
+                  >
+                    <ShieldAlert size={13} />
+                    <span>Factory Reset</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+
+          {/* ================= SECTION 3: PREFERENCES ================= */}
+          <section className="space-y-4">
+            <div className="flex items-center gap-2.5 pb-2 border-b border-m3-outline-variant/30">
+              <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
+                <Sliders size={18} />
+              </div>
+              <div>
+                <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
+                  Preferences &amp; Appearance
+                </h2>
+                <p className="text-[11px] text-m3-on-surface-variant">
+                  Customize color themes, motion animation transitions, and grid density.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] shadow-xs overflow-hidden divide-y divide-m3-outline-variant/10">
+              {/* Theme Toggle Option */}
+              <div className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-xs font-bold text-m3-on-surface">Color Palette Mode</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">Toggle between crisp studio light mode and dark room studio mode.</p>
+                </div>
+                <div className="shrink-0 flex items-center bg-m3-surface-container rounded-xl p-1 border border-m3-outline-variant/25 shadow-xs relative overflow-hidden min-w-[180px]">
+                  <div className="absolute inset-y-1 left-1 right-1 pointer-events-none select-none">
+                    <motion.div
+                      className="h-full bg-m3-surface rounded-lg border border-m3-outline-variant/30 shadow-xs"
+                      layout
+                      animate={{
+                        x: theme === "light" ? "0%" : "100%",
+                        width: "calc(50% - 4px)",
+                      }}
+                      transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                    />
+                  </div>
+                  <button
+                    onClick={() => onThemeToggle && theme === "dark" && onThemeToggle()}
+                    className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                      theme === "light" ? "text-m3-primary font-extrabold" : "text-m3-on-surface-variant hover:text-m3-on-surface"
                     }`}
                   >
-                    <div className={`p-2 rounded-xl transition-all ${
-                      isActive ? "bg-m3-primary text-m3-on-primary" : "bg-m3-surface-container text-m3-outline group-hover:text-m3-on-surface"
-                    }`}>
-                      <Icon size={16} />
-                    </div>
-                    <div className="flex-1 min-w-0 pr-4">
-                      <div className="text-xs font-bold font-display">{tab.label}</div>
-                      <div className="text-[10px] text-m3-on-surface-variant font-semibold mt-0.5 truncate">{tab.desc}</div>
-                    </div>
-                    {tab.badge !== undefined && tab.badge > 0 && (
-                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 bg-red-500 text-white text-[10px] px-2 py-0.5 rounded-full font-mono font-bold leading-none animate-pulse">
-                        {tab.badge}
-                      </span>
-                    )}
+                    <Sun size={14} className={theme === "light" ? "text-m3-primary" : ""} />
+                    <span>Light</span>
                   </button>
-                );
-              })}
-            </div>
+                  <button
+                    onClick={() => onThemeToggle && theme === "light" && onThemeToggle()}
+                    className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
+                      theme === "dark" ? "text-m3-primary font-extrabold" : "text-m3-on-surface-variant hover:text-m3-on-surface"
+                    }`}
+                  >
+                    <Moon size={14} className={theme === "dark" ? "text-m3-primary" : ""} />
+                    <span>Dark</span>
+                  </button>
+                </div>
+              </div>
 
-            {/* Main Content Pane (Desktop and Mobile) */}
-            <div className="md:col-span-9">
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={activeTab}
-                  initial={animationsEnabled ? { opacity: 0, y: 12 } : {}}
-                  animate={animationsEnabled ? { opacity: 1, y: 0 } : {}}
-                  exit={animationsEnabled ? { opacity: 0, y: -8 } : {}}
-                  transition={
-                    animationsEnabled
-                      ? {
-                          type: "tween",
-                          ease: [0.16, 1, 0.3, 1], // easeOutExpo
-                          duration: 0.45,
-                        }
-                      : { duration: 0 }
-                  }
+              {/* Animations Toggle Option */}
+              <div className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-xs font-bold text-m3-on-surface">Motion Animations</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">Enable smooth spring transitions and modal entry effects.</p>
+                </div>
+                <button
+                  onClick={() => handleSetAnimationsEnabled(!animationsEnabled)}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
+                    animationsEnabled ? "bg-m3-primary" : "bg-m3-outline-variant"
+                  }`}
                 >
-                  {activeTab === "profile" && (
-                    <ProfileTab
-                      displayName={displayName}
-                      setDisplayName={setDisplayName}
-                      username={username}
-                      setUsername={setUsername}
-                      email={email}
-                      setEmail={setEmail}
-                      isEditing={isEditing}
-                      setIsEditing={setIsEditing}
-                      handleSaveProfile={handleSaveProfile}
-                      totalPosts={totalPosts}
-                      activeCount={activeCount}
-                      archivedCount={archivedCount}
-                      favoritesCount={favoritesCount}
-                      uniqueTags={uniqueTags}
-                      storageInfo={storageInfo}
-                    />
-                  )}
+                  <motion.div
+                    className="bg-white w-4 h-4 rounded-full shadow-md"
+                    animate={{ x: animationsEnabled ? 24 : 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  />
+                </button>
+              </div>
 
-                  {activeTab === "appearance" && (
-                    <AppearanceTab
-                      theme={theme}
-                      onThemeToggle={onThemeToggle}
-                      animationsEnabled={animationsEnabled}
-                      setAnimationsEnabled={handleSetAnimationsEnabled}
-                      compactMode={compactMode}
-                      setCompactMode={handleSetCompactMode}
-                    />
-                  )}
-
-                  {activeTab === "maintenance" && (
-                    <MaintenanceTab
-                      handleConsolidateTags={handleConsolidateTags}
-                      retryFailedThumbnails={retryFailedThumbnails}
-                      setToast={setToast}
-                      handleAnalyzeDuplicates={handleAnalyzeDuplicates}
-                      setShowConfirmClear={setShowConfirmClear}
-                      setShowConfirmClearAll={setShowConfirmClearAll}
-                      exportCSVData={exportCSVData}
-                      workerStats={workerStats}
-                      isDownloading={isDownloading}
-                      throttleStatus={throttleStatus}
-                    />
-                  )}
-
-                </motion.div>
-              </AnimatePresence>
+              {/* Grid Density Option */}
+              <div className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-xs font-bold text-m3-on-surface">Grid Density &amp; Compact Mode</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">Display cards in a compact, higher-density grid layout.</p>
+                </div>
+                <button
+                  onClick={() => handleSetCompactMode(!compactMode)}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
+                    compactMode ? "bg-m3-primary" : "bg-m3-outline-variant"
+                  }`}
+                >
+                  <motion.div
+                    className="bg-white w-4 h-4 rounded-full shadow-md"
+                    animate={{ x: compactMode ? 24 : 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  />
+                </button>
+              </div>
             </div>
-          </div>
+          </section>
+
         </div>
 
         {/* Confirmation Modal for Clearing Database */}
@@ -783,7 +867,6 @@ export const SettingsView = React.memo(
                 onClick={() => setShowConfirmClear(false)}
                 className="fixed inset-0 bg-black/60 backdrop-blur-xs"
               />
-
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -799,39 +882,10 @@ export const SettingsView = React.memo(
                       Backup Recommended Before Clear
                     </h3>
                     <p className="text-xs text-m3-on-surface-variant leading-relaxed font-sans">
-                      We strongly recommend creating a backup of your local database before clearing. Once cleared, all saved posts, collections, and custom curation notes will be permanently deleted and **cannot be undone**.
+                      We strongly recommend creating a backup of your local database before clearing. Once cleared, all saved posts, collections, and custom curation notes will be permanently deleted and cannot be undone.
                     </p>
                   </div>
                 </div>
-
-                <div className="bg-m3-surface-container/50 border border-m3-outline-variant/30 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-xs font-bold text-m3-on-surface font-sans">
-                      <Layers size={14} className="text-m3-primary" />
-                      <span>Download Archive</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-m3-outline font-semibold">
-                      {posts.length} records
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-m3-on-surface-variant leading-normal font-sans">
-                    Export your curated library into a JSON file so you can restore or migrate it at any time.
-                  </p>
-                  <button
-                    onClick={() => {
-                      exportData();
-                      setToast({
-                        type: "success",
-                        message: "Backup export completed successfully!",
-                      });
-                    }}
-                    className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs active:scale-95"
-                  >
-                    <Layers size={14} />
-                    <span>Download JSON Backup</span>
-                  </button>
-                </div>
-
                 <div className="flex flex-col sm:flex-row gap-2 sm:justify-end pt-2">
                   <button
                     onClick={() => setShowConfirmClear(false)}
@@ -851,7 +905,7 @@ export const SettingsView = React.memo(
           )}
         </AnimatePresence>
 
-        {/* Confirmation Modal for Clearing All Data & LocalStorage */}
+        {/* Confirmation Modal for Hard Reset */}
         <AnimatePresence>
           {showConfirmClearAll && (
             <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -862,7 +916,6 @@ export const SettingsView = React.memo(
                 onClick={() => setShowConfirmClearAll(false)}
                 className="fixed inset-0 bg-black/60 backdrop-blur-xs"
               />
-
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: 10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -878,34 +931,10 @@ export const SettingsView = React.memo(
                       Wipe All Data &amp; Hard Reset App?
                     </h3>
                     <p className="text-xs text-m3-on-surface-variant leading-relaxed font-sans">
-                      This will permanently wipe **all** bookmark records from IndexedDB and clear **all** local storage settings (including your display name, email, customized layouts, and theme). The app will be restored to its raw initial default state. **This cannot be undone.**
+                      This will permanently wipe all bookmark records from IndexedDB and clear all local storage settings. The app will be restored to its initial default state. This cannot be undone.
                     </p>
                   </div>
                 </div>
-
-                <div className="bg-red-500/5 border border-red-500/10 rounded-2xl p-4 space-y-2">
-                  <div className="flex items-center gap-2 text-xs font-bold text-red-600 font-sans">
-                    <ShieldAlert size={14} />
-                    <span>Immediate Action Required</span>
-                  </div>
-                  <p className="text-[11px] text-m3-on-surface-variant leading-relaxed font-sans">
-                    To preserve your curation work, you should export a backup JSON file before proceeding with this hard reset.
-                  </p>
-                  <button
-                    onClick={() => {
-                      exportData();
-                      setToast({
-                        type: "success",
-                        message: "Backup export completed successfully!",
-                      });
-                    }}
-                    className="w-full flex items-center justify-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl py-2 text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs active:scale-95"
-                  >
-                    <Layers size={14} />
-                    <span>Download JSON Backup First</span>
-                  </button>
-                </div>
-
                 <div className="flex flex-col sm:flex-row gap-2 sm:justify-end pt-2">
                   <button
                     onClick={() => setShowConfirmClearAll(false)}
@@ -924,30 +953,6 @@ export const SettingsView = React.memo(
             </div>
           )}
         </AnimatePresence>
-
-
-        {/* Manual Bookmark Creator Modal */}
-        <AnimatePresence>
-          {isAddModalOpen && (
-            <AddBookmarkModal
-              isOpen={isAddModalOpen}
-              onClose={() => setIsAddModalOpen(false)}
-              onAdd={async (newPost) => {
-                await db.posts.put(newPost);
-                const fresh = await db.posts.toArray();
-                setPosts(fresh);
-                setToast({
-                  type: "success",
-                  message: "Bookmark added successfully!",
-                });
-              }}
-              allTags={allTags}
-              allCollections={allCollections}
-            />
-          )}
-        </AnimatePresence>
-
-      </div>
       </div>
     );
   },

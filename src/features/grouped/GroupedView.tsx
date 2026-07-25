@@ -29,6 +29,7 @@ import {
   Hash,
   Plus,
   MoreVertical,
+  FolderTree,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -164,6 +165,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
           createdAt: new Date().toISOString(),
         });
 
+        triggerVibration("medium");
         toast.success(`Created folder "${trimmed}"!`, { icon: "📁" });
         await loadDbCollections();
       } catch (err) {
@@ -173,6 +175,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
     };
 
     const handleSelectFolderType = (type: "collection" | "creator" | "tag" | null) => {
+      triggerVibration(type ? "pulse" : "tap");
       setSelectedFolderType(type);
       if (type) {
         setGroupFilterType(type);
@@ -460,6 +463,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
     };
 
     const handleDeleteExecute = async (targetName: string) => {
+      triggerVibration("thud");
       if (deletingGroup?.type === "collection") {
         const allPosts = await db.posts.toArray();
         const updatedPosts = allPosts.map(post => {
@@ -960,6 +964,14 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
                 >
                   <MoreVertical size={12} />
                 </button>
+              )}
+
+              {/* Subfolder Depth Badge Overlay (for Level 1 Parent Cards) */}
+              {customSubtitle && (
+                <div className="absolute bottom-2 left-2 bg-m3-surface/90 text-m3-on-surface text-[9px] font-bold px-2 py-0.5 rounded-full shadow-sm border border-m3-outline-variant/30 backdrop-blur-md flex items-center gap-1 z-20 font-mono">
+                  <FolderTree size={10} className="text-m3-primary shrink-0" />
+                  <span>{customSubtitle}</span>
+                </div>
               )}
 
               {/* Count Badge Overlay */}

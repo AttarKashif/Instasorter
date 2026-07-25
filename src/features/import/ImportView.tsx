@@ -980,7 +980,7 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
                                 </span>
                               </button>
                               {expandedSampleId === err.id && (
-                                <pre className="mt-1 p-2 bg-m3-surface-container text-[10px] font-mono rounded-lg overflow-x-auto text-m3-on-surface-variant border border-m3-outline-variant/30">
+                                <pre className="mt-1 p-2 bg-m3-surface-container text-[10px] font-mono rounded-lg overflow-x-auto max-h-40 overflow-y-auto text-m3-on-surface-variant border border-m3-outline-variant/30">
                                   {err.rawSample}
                                 </pre>
                               )}

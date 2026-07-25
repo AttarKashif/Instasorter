@@ -377,7 +377,7 @@ export const Shell = ({
       </nav>
 
       {/* Main Content Area */}
-      <main className="flex-1 min-w-0 overflow-hidden flex flex-col relative">
+      <main className="flex-1 min-w-0 overflow-hidden flex flex-col relative pb-20 md:pb-0">
         <AnimatePresence>
           {!isOnline && (
             <motion.div
@@ -402,7 +402,7 @@ export const Shell = ({
       </main>
 
       {/* Material 3 Bottom Navigation Bar (Mobile) */}
-      <nav className="md:hidden fixed bottom-5 left-4 right-4 mx-auto max-w-[420px] h-16 bg-m3-surface-container/85 backdrop-blur-xl border border-m3-outline-variant/30 px-2 flex justify-around items-center z-50 rounded-full shadow-2xl">
+      <nav className="md:hidden fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom,0px))] left-4 right-4 mx-auto max-w-[420px] h-16 bg-m3-surface-container/85 backdrop-blur-xl border border-m3-outline-variant/30 px-2 flex justify-around items-center z-50 rounded-full shadow-2xl">
         {navItems.map((item) => {
           const isActive = currentView === item.id;
           const Icon = item.icon;

@@ -121,13 +121,18 @@ function generateSvgFallback(postId: string, postUrl: string, username: string |
 </svg>`;
 }
 
-// Helper: Parse shortcode from Instagram URL
+// Helper: Parse shortcode from Instagram URL with support for reels, posts, stories, shares
 function getShortcode(url: string): string | null {
-  const match = url.match(/(?:instagram\.com|instagr\.am)\/(?:p|reel|reels|tv)\/([a-zA-Z0-9_-]+)/i);
-  return match ? match[1] : null;
+  if (!url) return null;
+  const cleanUrl = url.split('?')[0];
+  const match = cleanUrl.match(/(?:instagram\.com|instagr\.am)\/(?:p|reel|reels|tv|stories|share\/p)\/([a-zA-Z0-9_-]+)/i);
+  if (match && match[1]) return match[1];
+  // Direct shortcode passed in
+  if (/^[a-zA-Z0-9_-]{8,15}$/.test(url.trim())) return url.trim();
+  return null;
 }
 
-// Helper: Fetch with Timeout to prevent blocking/hanging connection proxy gateway errors
+// Helper: Fetch with Timeout & Retry
 async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 2500): Promise<Response> {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -144,11 +149,36 @@ async function fetchWithTimeout(url: string, options: any = {}, timeoutMs = 2500
   }
 }
 
+// Helper: Image Magic Bytes Buffer Integrity Validator
+function isValidImageBuffer(buffer: Buffer): boolean {
+  if (!buffer || buffer.length < 800) return false;
+  // JPEG: FF D8 FF
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) return true;
+  // PNG: 89 50 4E 47
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) return true;
+  // WebP: 52 49 46 46 (RIFF)
+  if (buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) return true;
+  // GIF: 47 49 46 38
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) return true;
+  return false;
+}
+
+// Helper: Clean and decode escaped image URLs
+function cleanImageUrl(rawUrl: string): string {
+  if (!rawUrl) return '';
+  return rawUrl
+    .replace(/\\u0026/g, '&')
+    .replace(/\\u002F/g, '/')
+    .replace(/&amp;/g, '&')
+    .replace(/\\"/g, '"')
+    .replace(/\\\//g, '/');
+}
+
 // Helper: Extract username from Instagram embed page HTML
 function extractUsernameFromHtml(html: string): string | null {
   if (!html) return null;
 
-  // Strategy 1: Link with utm_source=ig_embed (Most reliable on embed pages)
+  // Strategy 1: Link with utm_source=ig_embed
   const utmMatch = html.match(/instagram\.com\/([a-zA-Z0-9_\.]+)\/\?utm_source=ig_embed/i);
   if (utmMatch && utmMatch[1]) {
     const username = utmMatch[1].trim();
@@ -172,16 +202,7 @@ function extractUsernameFromHtml(html: string): string | null {
     }
   }
 
-  // Strategy 4: Profile link in anchor tag
-  const anchorProfileMatches = html.matchAll(/href=["']https?:\/\/(?:www\.)?instagram\.com\/(?!p|reel|reels|tv|stories|explore|developer|legal|about|jobs|privacy|terms|directory|static|accounts|emails|web|graphql|api|oauth|embed|static)([a-zA-Z0-9_\.]+)\/?["']/gi);
-  for (const match of anchorProfileMatches) {
-    if (match[1]) {
-      const username = match[1].trim();
-      if (username) return username;
-    }
-  }
-
-  // Strategy 5: Meta title containing (@username)
+  // Strategy 4: Meta title containing (@username)
   const ogTitleMatch = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
                        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:title["']/i) ||
                        html.match(/<title>([^<]+)<\/title>/i);
@@ -201,38 +222,70 @@ function extractUsernameFromHtml(html: string): string | null {
 }
 
 const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/605.1.15',
-  'Mozilla/5.0 (iPad; CPU OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/605.1.15',
-  'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/605.1.15',
+  'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
 ];
 
-function getRandomHeaders() {
+function getRandomHeaders(referer?: string) {
   const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
-  const acceptLanguages = [
-    'en-US,en;q=0.9',
-    'en-GB,en;q=0.8,en;q=0.7',
-    'en-CA,en;q=0.9,en-US;q=0.8',
-    'en-US,en;q=0.9,es;q=0.8',
-  ];
-  const lang = acceptLanguages[Math.floor(Math.random() * acceptLanguages.length)];
-  
+  const isMobile = ua.includes('Mobile') || ua.includes('iPhone') || ua.includes('Android');
+  const platform = ua.includes('Windows') ? '"Windows"' : ua.includes('Macintosh') || ua.includes('iPhone') ? '"macOS"' : '"Linux"';
+
   return {
     'User-Agent': ua,
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-    'Accept-Language': lang,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
+    'Sec-CH-UA': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    'Sec-CH-UA-Mobile': isMobile ? '?1' : '?0',
+    'Sec-CH-UA-Platform': platform,
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-Site': 'cross-site',
     'Sec-Fetch-User': '?1',
     'Upgrade-Insecure-Requests': '1',
-    'Cache-Control': 'max-age=0',
+    'Referer': referer || 'https://www.instagram.com/',
+    'Cache-Control': 'no-cache',
   };
+}
+
+// In-Memory Request Coalescing Map (Deduplication)
+const inFlightScrapes = new Map<string, Promise<any>>();
+
+// In-Memory RAM Cache for Fast Scrape Results
+const memoryCache = new Map<string, { data: any, timestamp: number }>();
+const RAM_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// Circuit Breaker for Mirror Host Cooldowns
+const hostFailures = new Map<string, { count: number, cooldownUntil: number }>();
+
+function isHostInCooldown(host: string): boolean {
+  const status = hostFailures.get(host);
+  if (!status) return false;
+  if (Date.now() > status.cooldownUntil) {
+    hostFailures.delete(host);
+    return false;
+  }
+  return status.count >= 3;
+}
+
+function recordHostFailure(host: string) {
+  const status = hostFailures.get(host) || { count: 0, cooldownUntil: 0 };
+  status.count += 1;
+  if (status.count >= 3) {
+    status.cooldownUntil = Date.now() + 30000; // 30s cooldown
+    console.warn(`[Thumbnail Scraper] Circuit Breaker: Host ${host} temporarily paused for 30s after repeated failures.`);
+  }
+  hostFailures.set(host, status);
+}
+
+function recordHostSuccess(host: string) {
+  hostFailures.delete(host);
 }
 
 // Balance brace-counting JSON string extractor to extract complex, nested JSON payloads safely
@@ -353,521 +406,264 @@ function extractStructuredPostData(htmlContent: string) {
   return null;
 }
 
-// Scrape logic
-async function scrapeInstagramImage(postUrl: string, postId: string, force: boolean, mediaType?: string) {
+// Scrape logic with Request Coalescing (Deduplication) and RAM Caching
+async function scrapeInstagramImage(postUrl: string, postId: string, force: boolean, mediaType?: string): Promise<any> {
+  const cacheKey = `${postId}_${force ? 'force' : 'std'}`;
+  
+  // 1. Check RAM Cache if not forced
+  if (!force) {
+    const cached = memoryCache.get(postId);
+    if (cached && Date.now() - cached.timestamp < RAM_CACHE_TTL_MS) {
+      console.log(`[Thumbnail Scraper] [RAM Cache Hit] Returning 0ms cached result for post ${postId}`);
+      return cached.data;
+    }
+  }
+
+  // 2. Coalesce duplicate inflight requests for the same postId
+  if (inFlightScrapes.has(cacheKey)) {
+    console.log(`[Thumbnail Scraper] [Inflight Coalesce] Request already running for post ${postId}, reusing promise.`);
+    return inFlightScrapes.get(cacheKey)!;
+  }
+
+  const scrapePromise = scrapeInstagramImageInternal(postUrl, postId, force, mediaType)
+    .then((result) => {
+      if (result.success) {
+        memoryCache.set(postId, { data: result, timestamp: Date.now() });
+      }
+      return result;
+    })
+    .finally(() => {
+      inFlightScrapes.delete(cacheKey);
+    });
+
+  inFlightScrapes.set(cacheKey, scrapePromise);
+  return scrapePromise;
+}
+
+// Internal multi-strategy Instagram Scraper
+async function scrapeInstagramImageInternal(postUrl: string, postId: string, force: boolean, mediaType?: string) {
   const startTime = Date.now();
-  let strategyUsed = "none";
-  let httpStatus = 0;
-  let imageUrl: string | null = null;
-  let reason = "";
-  let html = "";
-  const isCarousel = mediaType === 'carousel';
+  const shortcode = getShortcode(postUrl) || postId;
+  const usernameFromUrl = extractUsernameFromUrl(postUrl);
+  const headers = getRandomHeaders();
   const additionalSlides: string[] = [];
 
-  const headers = getRandomHeaders();
-
-  // Helper to dynamically add the scraped username to a successful response object
-  const addUsername = async (res: any) => {
-    if (!res.success) return res;
-    try {
-      let creatorUsername: string | null = null;
-      if (html) {
-        creatorUsername = extractUsernameFromHtml(html);
-      } else {
-        let cleanEmbedUrl = postUrl;
-        if (cleanEmbedUrl.endsWith('/')) {
-          cleanEmbedUrl = cleanEmbedUrl.slice(0, -1);
-        }
-        const embedUrl = `${cleanEmbedUrl}/embed/`;
-        console.log(`[Thumbnail Scraper] Fetching embed page specifically for username extraction: ${embedUrl}`);
-        const embedRes = await fetchWithTimeout(embedUrl, { headers }, 3000);
-        if (embedRes.ok) {
-          const embedHtml = await embedRes.text();
-          creatorUsername = extractUsernameFromHtml(embedHtml);
-        }
-      }
-      if (creatorUsername) {
-        console.log(`[Thumbnail Scraper] Successfully extracted creator username: ${creatorUsername}`);
-        res.creatorUsername = creatorUsername;
-      }
-    } catch (err: any) {
-      console.log(`[Thumbnail Scraper] Issue adding username: ${err.message || err}`);
-    }
-    return res;
-  };
-
-  // Helper to try direct media redirect URL (/media/?size=l)
-  const tryMediaRedirectFallback = async (): Promise<any | null> => {
-    const shortcode = getShortcode(postUrl);
-    if (!shortcode) return null;
-    console.log(`[Thumbnail Scraper] [Media Redirect Fallback] Trying direct media redirect for shortcode: ${shortcode}`);
-    try {
-      let baseUrl = postUrl.split('?')[0];
-      if (baseUrl.endsWith('/')) {
-        baseUrl = baseUrl.slice(0, -1);
-      }
-      const mediaRedirectUrl = `${baseUrl}/media/?size=l`;
-      console.log(`[Thumbnail Scraper] Fetching media redirect URL: ${mediaRedirectUrl}`);
-      
-      const mediaRes = await fetchWithTimeout(mediaRedirectUrl, { headers, redirect: 'follow' }, 6000);
-      if (mediaRes.ok && mediaRes.headers.get('content-type')?.includes('image')) {
-        const bufferArray = await mediaRes.arrayBuffer();
-        const safeBuffer = Buffer.from(bufferArray);
-        if (safeBuffer.length > 1000) {
-          const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-          const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-          
-          if (fs.existsSync(absolutePathSvg)) {
-            try { await fs.promises.unlink(absolutePathSvg); } catch (e) {}
-          }
-          
-          await fs.promises.writeFile(absolutePathJpg, safeBuffer);
-          console.log(`[Thumbnail Scraper] [Media Redirect Fallback SUCCESS] Saved high-res JPG directly from /media/?size=l!`);
-          
-          const resObj = {
-            success: true,
-            path: `/thumbnails/${postId}.jpg`,
-            strategyUsed: "Media Redirect Fallback (/media/?size=l)",
-            duration: Date.now() - startTime,
-            httpStatus: 200
-          };
-          return await addUsername(resObj);
-        }
-      } else {
-        console.log(`[Thumbnail Scraper] [Media Redirect Fallback] Non-ok status or non-image type: ${mediaRes.status}, ${mediaRes.headers.get('content-type')}`);
-      }
-    } catch (mediaErr: any) {
-      console.log(`[Thumbnail Scraper] [Media Redirect Fallback Error]: ${mediaErr.message || mediaErr}`);
-    }
-    return null;
-  };
-
   console.log(`\n========================================`);
-  console.log(`[Thumbnail Scraper] START processing Post ID: ${postId} (Force: ${force})`);
+  console.log(`[Thumbnail Scraper] START processing Post ID: ${postId} (Shortcode: ${shortcode})`);
   console.log(`[Thumbnail Scraper] Post URL: ${postUrl}`);
 
-  try {
+  // Clean base URL
+  let baseUrl = postUrl.split('?')[0];
+  if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
-    // 1. Fetch public Instagram Embed page HTML (this is the single source of truth that contains both live media and metadata)
-    let cleanEmbedUrl = postUrl;
-    if (cleanEmbedUrl.endsWith('/')) {
-      cleanEmbedUrl = cleanEmbedUrl.slice(0, -1);
+  // -----------------------------------------------------------------
+  // STRATEGY 1: Direct Media CDN Endpoint (/media/?size=l or size=m) - FASTEST (~200ms)
+  // -----------------------------------------------------------------
+  try {
+    const mediaRedirectUrl = `${baseUrl}/media/?size=l`;
+    console.log(`[Thumbnail Scraper] [Strategy 1] Trying direct media redirect: ${mediaRedirectUrl}`);
+    const mediaRes = await fetchWithTimeout(mediaRedirectUrl, { headers, redirect: 'follow' }, 2000);
+    
+    if (mediaRes.ok && mediaRes.headers.get('content-type')?.includes('image')) {
+      const bufferArray = await mediaRes.arrayBuffer();
+      const safeBuffer = Buffer.from(bufferArray);
+      
+      if (isValidImageBuffer(safeBuffer)) {
+        const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
+        const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
+        
+        if (fs.existsSync(absolutePathSvg)) {
+          try { await fs.promises.unlink(absolutePathSvg); } catch (e) {}
+        }
+        
+        await fs.promises.writeFile(absolutePathJpg, safeBuffer);
+        const duration = Date.now() - startTime;
+        console.log(`[Thumbnail Scraper] [Strategy 1 SUCCESS] High-res JPG saved in ${duration}ms!`);
+        
+        return {
+          success: true,
+          path: `/thumbnails/${postId}.jpg`,
+          dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
+          strategyUsed: "Instagram Direct Media CDN Endpoint (/media/?size=l)",
+          duration,
+          httpStatus: 200,
+          creatorUsername: usernameFromUrl || undefined
+        };
+      }
     }
-    const embedUrl = `${cleanEmbedUrl}/embed/`;
+  } catch (err: any) {
+    console.log(`[Thumbnail Scraper] [Strategy 1 Bypassed]: ${err.message || err}`);
+  }
+
+  // -----------------------------------------------------------------
+  // STRATEGY 2: Rotating Mirror Metatag Extractors (ddinstagram / vxinstagram / kkinstagram)
+  // -----------------------------------------------------------------
+  const mirrors = [
+    { name: "ddinstagram", domain: "ddinstagram.com", url: `https://ddinstagram.com/p/${shortcode}/` },
+    { name: "vxinstagram", domain: "vxinstagram.com", url: `https://vxinstagram.com/p/${shortcode}/` },
+    { name: "kkinstagram", domain: "kkinstagram.com", url: `https://kkinstagram.com/p/${shortcode}/` }
+  ];
+
+  for (const mirror of mirrors) {
+    if (isHostInCooldown(mirror.domain)) {
+      console.log(`[Thumbnail Scraper] [Strategy 2] Skipping mirror ${mirror.name} due to circuit breaker cooldown.`);
+      continue;
+    }
 
     try {
-      console.log(`[Thumbnail Scraper] Executing fetch of public Instagram Embed page: ${embedUrl}`);
-      const response = await fetchWithTimeout(embedUrl, { headers, redirect: 'follow' }, 5000);
-      httpStatus = response.status;
-      console.log(`[Thumbnail Scraper] Embed page fetch returned HTTP status: ${response.status}`);
+      console.log(`[Thumbnail Scraper] [Strategy 2] Trying mirror: ${mirror.url}`);
+      const mirrorRes = await fetchWithTimeout(mirror.url, { headers, redirect: 'follow' }, 2500);
       
-      if (response.status === 429) {
-        console.log(`[Thumbnail Scraper] DETECTED RATE LIMIT (429) - Proceeding to fallback strategies.`);
-      } else if (response.url && (response.url.includes('/login/') || response.url.includes('accounts/login'))) {
-        console.log(`[Thumbnail Scraper] DETECTED LOGIN WALL REDIRECT (throttled) - Proceeding to fallback strategies.`);
-      } else if (response.ok) {
-        html = await response.text();
-        console.log(`[Thumbnail Scraper] Successfully retrieved Embed HTML payload (${html.length} bytes).`);
+      if (mirrorRes.ok) {
+        recordHostSuccess(mirror.domain);
+        const mirrorHtml = await mirrorRes.text();
+        const ogMatch = mirrorHtml.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || 
+                        mirrorHtml.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
+                        mirrorHtml.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
         
-        // Check for broken posts or private accounts
-        const brokenMarkers = ["Sorry, this page isn't available", "not available", "is private"];
-        if (brokenMarkers.some(marker => html.includes(marker))) {
-          console.log(`[Thumbnail Scraper] DETECTED BROKEN POST VIA MARKER`);
-          return {
-            success: false,
-            reason: 'Post not available',
-            strategyUsed: 'HTML Marker Detection',
-            duration: Date.now() - startTime,
-            httpStatus
-          };
+        let mirrorUsername: string | null = null;
+        const titleMatch = mirrorHtml.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+        if (titleMatch && titleMatch[1]) {
+          const atMatch = titleMatch[1].match(/@([a-zA-Z0-9_\.]+)/);
+          if (atMatch && atMatch[1]) mirrorUsername = atMatch[1];
+        }
+
+        if (ogMatch && ogMatch[1]) {
+          const mirrorImageUrl = cleanImageUrl(ogMatch[1]);
+          console.log(`[Thumbnail Scraper] [Strategy 2 - ${mirror.name}] Extracted image URL: ${mirrorImageUrl}`);
+          
+          const imgRes = await fetchWithTimeout(mirrorImageUrl, { headers: getRandomHeaders(mirror.url) }, 3000);
+          if (imgRes.ok) {
+            const bufferArray = await imgRes.arrayBuffer();
+            const safeBuffer = Buffer.from(bufferArray);
+            if (isValidImageBuffer(safeBuffer)) {
+              const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
+              const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
+              if (fs.existsSync(absolutePathSvg)) {
+                try { await fs.promises.unlink(absolutePathSvg); } catch (e) {}
+              }
+              await fs.promises.writeFile(absolutePathJpg, safeBuffer);
+              const duration = Date.now() - startTime;
+              console.log(`[Thumbnail Scraper] [Strategy 2 SUCCESS (${mirror.name})] Saved JPG in ${duration}ms!`);
+              
+              return {
+                success: true,
+                path: `/thumbnails/${postId}.jpg`,
+                dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
+                strategyUsed: `Mirror Metatag Extractor (${mirror.name})`,
+                duration,
+                httpStatus: 200,
+                creatorUsername: mirrorUsername || usernameFromUrl || undefined
+              };
+            }
+          }
         }
       } else {
-        console.log(`[Thumbnail Scraper] Embed page fetch returned non-200: ${response.status}`);
+        recordHostFailure(mirror.domain);
       }
-    } catch (embedErr: any) {
-      console.log(`[Thumbnail Scraper] Embed page fetch completed with: ${embedErr.message || embedErr}`);
+    } catch (err: any) {
+      recordHostFailure(mirror.domain);
+      console.log(`[Thumbnail Scraper] [Strategy 2 - ${mirror.name} Bypassed]: ${err.message || err}`);
     }
+  }
 
-    if (html) {
-      // Primary parsing strategy: Extract fully structured structured JSON post details
-      console.log(`[Thumbnail Scraper] [Strategy 1 - Primary] Attempting structured JSON data extraction...`);
+  // -----------------------------------------------------------------
+  // STRATEGY 3: Public Instagram Embed HTML Page Extraction (/embed/captioned/)
+  // -----------------------------------------------------------------
+  try {
+    const embedUrl = `${baseUrl}/embed/captioned/`;
+    console.log(`[Thumbnail Scraper] [Strategy 3] Fetching public Instagram Embed HTML: ${embedUrl}`);
+    const embedRes = await fetchWithTimeout(embedUrl, { headers, redirect: 'follow' }, 3000);
+    if (embedRes.ok) {
+      const html = await embedRes.text();
+      let creatorUsername = extractUsernameFromHtml(html) || usernameFromUrl;
+      let imageUrl: string | null = null;
+
+      // Extract via structured JSON or regex fallback
       const structuredData = extractStructuredPostData(html);
-      
       if (structuredData && structuredData.slides && structuredData.slides.length > 0) {
-        console.log(`[Thumbnail Scraper] Structured JSON parser success. Type: ${structuredData.type}, Detected Slides: ${structuredData.slides.length}`);
         imageUrl = structuredData.slides[0].display_url;
-        strategyUsed = `Structured JSON Parser (${structuredData.type})`;
+        if (structuredData.username) creatorUsername = structuredData.username;
 
-        // If multiple slides are found, download additional slides to local storage
+        // Save carousel additional slides if present
         if (structuredData.slides.length > 1) {
-          console.log(`[Thumbnail Scraper] Carousel slide assets download initialized for ${structuredData.slides.length} slides.`);
-          for (let i = 1; i < structuredData.slides.length; i++) {
+          for (let i = 1; i < Math.min(structuredData.slides.length, 10); i++) {
             const slideUrl = structuredData.slides[i].display_url;
             if (!slideUrl) continue;
             const slidePath = path.join(THUMBNAILS_DIR, `${postId}_${i}.jpg`);
             const slideRelativePath = `/thumbnails/${postId}_${i}.jpg`;
-
             try {
-              console.log(`[Thumbnail Scraper] Downloading slide #${i}: ${slideUrl}`);
-              const slideRes = await fetchWithTimeout(slideUrl, { headers: { 'User-Agent': headers['User-Agent'] } }, 4000);
+              const slideRes = await fetchWithTimeout(slideUrl, { headers: getRandomHeaders(embedUrl) }, 2500);
               if (slideRes.ok) {
-                const slideArrayBuffer = await slideRes.arrayBuffer();
-                await fs.promises.writeFile(slidePath, Buffer.from(slideArrayBuffer));
-                additionalSlides.push(slideRelativePath);
-                console.log(`[Thumbnail Scraper] Slide #${i} saved successfully at ${slideRelativePath}`);
-              } else {
-                console.warn(`[Thumbnail Scraper] Slide #${i} download returned status ${slideRes.status}`);
+                const slideBuf = Buffer.from(await slideRes.arrayBuffer());
+                if (isValidImageBuffer(slideBuf)) {
+                  await fs.promises.writeFile(slidePath, slideBuf);
+                  additionalSlides.push(slideRelativePath);
+                }
               }
-            } catch (slideErr: any) {
-              console.warn(`[Thumbnail Scraper] Slide #${i} download failed: ${slideErr.message}`);
-            }
+            } catch (e) {}
           }
         }
-      } else {
-        console.log(`[Thumbnail Scraper] Structured JSON parser could not extract slides. Invoking secondary matchers...`);
       }
 
-      // Secondary parsing strategy: Fallback Regex Matchers
       if (!imageUrl) {
-        // Fallback 1: Open Graph og:image
-        console.log(`[Thumbnail Scraper] [Fallback 1] Checking Open Graph (og:image) meta tag...`);
         const ogMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || 
                         html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
-        if (ogMatch && ogMatch[1]) {
-          imageUrl = ogMatch[1].replace(/&amp;/g, '&');
-          strategyUsed = "Open Graph";
-          console.log(`[Thumbnail Scraper] og:image URL extracted: ${imageUrl}`);
-        }
+        if (ogMatch && ogMatch[1]) imageUrl = cleanImageUrl(ogMatch[1]);
+      }
 
-        // Fallback 2: Twitter Card twitter:image
-        if (!imageUrl) {
-          console.log(`[Thumbnail Scraper] [Fallback 2] Checking Twitter Card (twitter:image) meta tag...`);
-          const twitterMatch = html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i) ||
-                               html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*name=["']twitter:image["']/i);
-          if (twitterMatch && twitterMatch[1]) {
-            imageUrl = twitterMatch[1].replace(/&amp;/g, '&');
-            strategyUsed = "Twitter Card";
-            console.log(`[Thumbnail Scraper] twitter:image URL extracted: ${imageUrl}`);
-          }
-        }
+      if (!imageUrl) {
+        const imgTagMatch = html.match(/<img[^>]*class=["'][^"']*MediaImage[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
+                            html.match(/<img[^>]*src=["']([^"']+)["'][^>]*class=["'][^"']*MediaImage[^"']*["']/i);
+        if (imgTagMatch && imgTagMatch[1]) imageUrl = cleanImageUrl(imgTagMatch[1]);
+      }
 
-        // Fallback 3: HTML Image Elements (EmbeddedMediaImage)
-        if (!imageUrl) {
-          console.log(`[Thumbnail Scraper] [Fallback 3] Checking for display image element markup (EmbeddedMediaImage)...`);
-          const imgTagMatch = html.match(/<img[^>]*class=["'][^"']*MediaImage[^"']*["'][^>]*src=["']([^"']+)["']/i) ||
-                              html.match(/<img[^>]*src=["']([^"']+)["'][^>]*class=["'][^"']*MediaImage[^"']*["']/i) ||
-                              html.match(/<img[^>]*class=["']EmbeddedMediaImage["'][^>]*src=["']([^"']+)["']/i) ||
-                              html.match(/<img[^>]*src=["']([^"']+)["'][^>]*class=["']EmbeddedMediaImage["']/i);
-          if (imgTagMatch && imgTagMatch[1]) {
-            imageUrl = imgTagMatch[1].replace(/&amp;/g, '&');
-            strategyUsed = "Embed Image Element Markup";
-            console.log(`[Thumbnail Scraper] Embed Image Element extracted: ${imageUrl}`);
-          }
-        }
-
-        // Fallback 4: Raw script/scontent scanner
-        if (!imageUrl) {
-          console.log(`[Thumbnail Scraper] [Fallback 4] Scanning HTML for raw scontent image links...`);
-          const scriptMatches = html.match(/"(https:\/\/scontent\.[^"]+)"/g) || html.match(/'(https:\/\/scontent\.[^']+)'/g);
-          if (scriptMatches && scriptMatches.length > 0) {
-            const cleanUrls = scriptMatches.map(m => m.slice(1, -1).replace(/\\u0026/g, '&').replace(/&amp;/g, '&'));
-            const imgUrls = cleanUrls.filter(url => url.includes('instagram') || url.includes('scontent'));
-            if (imgUrls.length > 0) {
-              imageUrl = imgUrls[0];
-              strategyUsed = "Embedded JSON (scontent list)";
-              console.log(`[Thumbnail Scraper] Found candidate scontent URL: ${imageUrl}`);
+      if (imageUrl) {
+        console.log(`[Thumbnail Scraper] [Strategy 3] Image URL extracted: ${imageUrl}`);
+        const imgRes = await fetchWithTimeout(imageUrl, { headers: getRandomHeaders(embedUrl) }, 3000);
+        if (imgRes.ok) {
+          const bufferArray = await imgRes.arrayBuffer();
+          const safeBuffer = Buffer.from(bufferArray);
+          if (isValidImageBuffer(safeBuffer)) {
+            const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
+            const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
+            if (fs.existsSync(absolutePathSvg)) {
+              try { await fs.promises.unlink(absolutePathSvg); } catch (e) {}
             }
+            await fs.promises.writeFile(absolutePathJpg, safeBuffer);
+            const duration = Date.now() - startTime;
+            console.log(`[Thumbnail Scraper] [Strategy 3 SUCCESS] Saved JPG in ${duration}ms!`);
+
+            return {
+              success: true,
+              path: `/thumbnails/${postId}.jpg`,
+              dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
+              strategyUsed: "Public Instagram Embed Extraction",
+              duration,
+              httpStatus: 200,
+              creatorUsername: creatorUsername || undefined,
+              additionalSlides: additionalSlides.length > 0 ? additionalSlides : undefined
+            };
           }
         }
-
-        // Fallback 5: Generic Display URL inside JSON
-        if (!imageUrl) {
-          console.log(`[Thumbnail Scraper] [Fallback 5] Checking for "display_url" field inside script blocks...`);
-          const displayUrlMatch = html.match(/"display_url"\s*:\s*"([^"]+)"/i) || html.match(/'display_url'\s*:\s*'([^']+)'/i);
-          if (displayUrlMatch && displayUrlMatch[1]) {
-            imageUrl = displayUrlMatch[1].replace(/\\u0026/g, '&').replace(/&amp;/g, '&');
-            strategyUsed = "Embedded JSON (display_url)";
-            console.log(`[Thumbnail Scraper] Found display_url: ${imageUrl}`);
-          }
-        }
-      }
-    } else {
-      console.log(`[Thumbnail Scraper] HTML scraping bypassed because page content was already resolved.`);
-    }
-
-    // Strategy 6: OEmbed API Fallback Service (Bypassed because it requires Meta Developer credentials)
-    if (false && !imageUrl) {
-      console.log(`[Thumbnail Scraper] [Strategy 6] Standard scraping yielded no image. Querying Instagram OEmbed API...`);
-      try {
-        const oembedUrl = `https://api.instagram.com/oembed/?url=${encodeURIComponent(postUrl)}`;
-        const oembedResponse = await fetchWithTimeout(oembedUrl, { headers }, 2000);
-        console.log(`[Thumbnail Scraper] OEmbed API response status: ${oembedResponse.status}`);
-        
-        if (oembedResponse.ok) {
-          const contentType = oembedResponse.headers.get('content-type') || '';
-          if (contentType.includes('application/json') || contentType.includes('text/javascript')) {
-            const oembedData: any = await oembedResponse.json();
-            if (oembedData && oembedData.thumbnail_url) {
-              imageUrl = oembedData.thumbnail_url;
-              strategyUsed = "Instagram OEmbed API";
-              console.log(`[Thumbnail Scraper] [Strategy 6 SUCCESS] Extracted OEmbed thumbnail URL: ${imageUrl}`);
-              
-              // Write OEmbed cache file
-              const oembedCachePath = path.join(OEMBED_CACHE_DIR, `${postId}.json`);
-              await fs.promises.writeFile(oembedCachePath, JSON.stringify(oembedData, null, 2));
-              console.log(`[Thumbnail Scraper] Saved OEmbed metadata to disk: ${oembedCachePath}`);
-            } else {
-              console.log(`[Thumbnail Scraper] OEmbed succeeded but no thumbnail field:`, oembedData);
-            }
-          } else {
-            const errorText = await oembedResponse.text();
-            console.log(`[Thumbnail Scraper] OEmbed content-type non-JSON (${contentType}). Body: ${errorText.substring(0, 100)}`);
-          }
-        } else {
-          const errorText = await oembedResponse.text();
-          console.log(`[Thumbnail Scraper] OEmbed status was non-200: ${oembedResponse.status}. Body: ${errorText.substring(0, 100)}`);
-        }
-      } catch (oembedErr: any) {
-        console.log(`[Thumbnail Scraper] OEmbed network request bypassed: ${oembedErr.message || oembedErr}`);
       }
     }
-
-    // 1.5 Fallback: Try direct media redirect if scraper didn't find any image URL in html
-    if (!imageUrl) {
-      const mediaResult = await tryMediaRedirectFallback();
-      if (mediaResult) {
-        return mediaResult;
-      }
-    }
-
-    if (!imageUrl) {
-      const duration = Date.now() - startTime;
-      console.log(`[Thumbnail Scraper] Original preview scraping was not successful for post ${postId}. Generating SVG Fallback...`);
-      try {
-        const username = extractUsernameFromUrl(postUrl);
-        const svgContent = generateSvgFallback(postId, postUrl, username);
-        const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-        const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-        
-        // Remove old JPG if it exists to avoid caching conflicts
-        if (fs.existsSync(absolutePathJpg)) {
-          try {
-            await fs.promises.unlink(absolutePathJpg);
-          } catch (e) {}
-        }
-        
-        await fs.promises.writeFile(absolutePathSvg, svgContent);
-        return {
-          success: true,
-          path: `/thumbnails/${postId}.svg`,
-          dataUrl: `data:image/svg+xml;base64,${Buffer.from(svgContent).toString('base64')}`,
-          strategyUsed: "SVG Fallback Generator (No image URL found)",
-          duration,
-          httpStatus: 200,
-          creatorUsername: username || undefined
-        };
-      } catch (fallbackErr: any) {
-        console.error(`[Thumbnail Scraper] SVG Fallback generation failed:`, fallbackErr.message);
-        return {
-          success: false,
-          reason: "Original preview image URL not found & fallback failed.",
-          strategyUsed,
-          duration,
-          httpStatus: 404
-        };
-      }
-    }
-
-    // Download the image if found via scraping
-    let imgResponse;
-    try {
-      imgResponse = await fetchWithTimeout(imageUrl, { headers: { 'User-Agent': headers['User-Agent'] } }, 4000);
-    } catch (fetchErr: any) {
-      console.log(`[Thumbnail Scraper] Image download request failed: ${fetchErr.message}. Trying direct media redirect fallback...`);
-      const mediaResult = await tryMediaRedirectFallback();
-      if (mediaResult) {
-        return mediaResult;
-      }
-
-      const duration = Date.now() - startTime;
-      console.log(`[Thumbnail Scraper] Media redirect fallback failed too. Generating SVG Fallback...`);
-      try {
-        const username = extractUsernameFromUrl(postUrl) || (html ? extractUsernameFromHtml(html) : null);
-        const svgContent = generateSvgFallback(postId, postUrl, username);
-        const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-        const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-        
-        if (fs.existsSync(absolutePathJpg)) {
-          try {
-            await fs.promises.unlink(absolutePathJpg);
-          } catch (e) {}
-        }
-        
-        await fs.promises.writeFile(absolutePathSvg, svgContent);
-        return {
-          success: true,
-          path: `/thumbnails/${postId}.svg`,
-          dataUrl: `data:image/svg+xml;base64,${Buffer.from(svgContent).toString('base64')}`,
-          strategyUsed: "SVG Fallback Generator (Download error)",
-          duration,
-          httpStatus: 200,
-          creatorUsername: username || undefined
-        };
-      } catch (fallbackErr: any) {
-        return {
-          success: false,
-          reason: `Image download request failed: ${fetchErr.message}`,
-          strategyUsed,
-          duration,
-          httpStatus: 500
-        };
-      }
-    }
-
-    if (!imgResponse.ok) {
-      console.log(`[Thumbnail Scraper] Image download returned status ${imgResponse.status}. Trying direct media redirect fallback...`);
-      const mediaResult = await tryMediaRedirectFallback();
-      if (mediaResult) {
-        return mediaResult;
-      }
-
-      const duration = Date.now() - startTime;
-      console.log(`[Thumbnail Scraper] Media redirect fallback failed too. Generating SVG Fallback...`);
-      try {
-        const username = extractUsernameFromUrl(postUrl) || (html ? extractUsernameFromHtml(html) : null);
-        const svgContent = generateSvgFallback(postId, postUrl, username);
-        const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-        const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-        
-        if (fs.existsSync(absolutePathJpg)) {
-          try {
-            await fs.promises.unlink(absolutePathJpg);
-          } catch (e) {}
-        }
-        
-        await fs.promises.writeFile(absolutePathSvg, svgContent);
-        return {
-          success: true,
-          path: `/thumbnails/${postId}.svg`,
-          dataUrl: `data:image/svg+xml;base64,${Buffer.from(svgContent).toString('base64')}`,
-          strategyUsed: `SVG Fallback Generator (HTTP ${imgResponse.status})`,
-          duration,
-          httpStatus: 200,
-          creatorUsername: username || undefined
-        };
-      } catch (fallbackErr: any) {
-        return {
-          success: false,
-          reason: `Image download returned non-ok status: ${imgResponse.status}`,
-          strategyUsed,
-          duration,
-          httpStatus: imgResponse.status
-        };
-      }
-    }
-
-    let buffer;
-    try {
-      const arrayBuffer = await imgResponse.arrayBuffer();
-      buffer = Buffer.from(arrayBuffer);
-    } catch (bufferErr: any) {
-      const duration = Date.now() - startTime;
-      console.log(`[Thumbnail Scraper] Buffer conversion failed: ${bufferErr.message}. Generating SVG Fallback...`);
-      try {
-        const username = extractUsernameFromUrl(postUrl) || (html ? extractUsernameFromHtml(html) : null);
-        const svgContent = generateSvgFallback(postId, postUrl, username);
-        const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-        const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-        
-        if (fs.existsSync(absolutePathJpg)) {
-          try {
-            await fs.promises.unlink(absolutePathJpg);
-          } catch (e) {}
-        }
-        
-        await fs.promises.writeFile(absolutePathSvg, svgContent);
-        return {
-          success: true,
-          path: `/thumbnails/${postId}.svg`,
-          dataUrl: `data:image/svg+xml;base64,${Buffer.from(svgContent).toString('base64')}`,
-          strategyUsed: "SVG Fallback Generator (Buffer convert error)",
-          duration,
-          httpStatus: 200,
-          creatorUsername: username || undefined
-        };
-      } catch (fallbackErr: any) {
-        return {
-          success: false,
-          reason: `Buffer conversion was not successful: ${bufferErr.message}`,
-          strategyUsed,
-          duration,
-          httpStatus: 500
-        };
-      }
-    }
-
-    // Save locally
-    const relativePath = `/thumbnails/${postId}.jpg`;
-    const absolutePath = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-    const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-    
-    // Clear any existing SVG fallback if a real JPG is successfully retrieved
-    if (fs.existsSync(absolutePathSvg)) {
-      try {
-        await fs.promises.unlink(absolutePathSvg);
-      } catch (unlinkErr) {}
-    }
-
-    await fs.promises.writeFile(absolutePath, buffer);
-
-    const duration = Date.now() - startTime;
-    console.log(`\n--- [THUMBNAIL WORKER FETCH LOG] ---\nURL: ${postUrl}\nSuccess/Failure: Success\nStatus: Thumbnail fetched successfully\nDuration: ${duration}ms\nHTTP Status: ${httpStatus || 200}\nStrategy used: ${strategyUsed}\n--------------------------------------\n`);
-
-    return await addUsername({
-      success: true,
-      path: relativePath,
-      dataUrl: `data:image/jpeg;base64,${buffer.toString('base64')}`,
-      strategyUsed,
-      duration,
-      httpStatus: httpStatus || 200,
-      additionalSlides: additionalSlides.length > 0 ? additionalSlides : undefined
-    });
-
   } catch (err: any) {
-    const duration = Date.now() - startTime;
-    console.log(`[Thumbnail Scraper] Unexpected issue: ${err.message}. Generating SVG Fallback...`);
-    try {
-      const username = extractUsernameFromUrl(postUrl) || (html ? extractUsernameFromHtml(html) : null);
-      const svgContent = generateSvgFallback(postId, postUrl, username);
-      const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-      const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-      
-      if (fs.existsSync(absolutePathJpg)) {
-        try {
-          await fs.promises.unlink(absolutePathJpg);
-        } catch (e) {}
-      }
-      
-      await fs.promises.writeFile(absolutePathSvg, svgContent);
-      return {
-        success: true,
-        path: `/thumbnails/${postId}.svg`,
-        dataUrl: `data:image/svg+xml;base64,${Buffer.from(svgContent).toString('base64')}`,
-        strategyUsed: "SVG Fallback Generator (Catch block fallback)",
-        duration,
-        httpStatus: 200,
-        creatorUsername: username || undefined
-      };
-    } catch (fallbackErr: any) {
-      return {
-        success: false,
-        reason: `Unexpected issue: ${err.message}`,
-        strategyUsed,
-        duration,
-        httpStatus: httpStatus || 500
-      };
-    }
+    console.log(`[Thumbnail Scraper] [Strategy 3 Bypassed]: ${err.message || err}`);
   }
+
+  // -----------------------------------------------------------------
+  // FAILURE: Return error status when all strategies fail
+  // -----------------------------------------------------------------
+  const duration = Date.now() - startTime;
+  console.log(`[Thumbnail Scraper] Scraper unable to fetch preview image for post ${postId}`);
+  return {
+    success: false,
+    reason: "Failed to scrape preview image from Instagram.",
+    strategyUsed: "Multi-Strategy Scraper Engine",
+    duration,
+    httpStatus: 404
+  };
 }
 
 // API: Fetch and Download Thumbnail
@@ -918,21 +714,6 @@ app.post("/api/fetch-thumbnail", async (req, res) => {
         });
         return;
       }
-    } else if (fs.existsSync(cachePathSvg)) {
-      let dataUrl: string | undefined;
-      try {
-        const fileBuf = await fs.promises.readFile(cachePathSvg);
-        dataUrl = `data:image/svg+xml;base64,${fileBuf.toString('base64')}`;
-      } catch (err) {}
-
-      res.json({
-        success: true,
-        path: `/thumbnails/${safeId}.svg`,
-        dataUrl,
-        cached: true,
-        strategyUsed: "Local Cache Disk Lookup"
-      });
-      return;
     }
   }
 
@@ -1150,6 +931,105 @@ app.post("/api/oembed", async (req, res) => {
       error: err.message || "Failed to fetch OEmbed metadata"
     });
   }
+});
+
+// Server-Side Background Scrape Worker Engine
+interface ServerQueueItem {
+  id: string;
+  url: string;
+  mediaType?: string;
+  attempts: number;
+}
+const serverScrapeQueue: ServerQueueItem[] = [];
+const serverQueueStatusMap = new Map<string, { status: "pending" | "processing" | "success" | "failed"; path?: string; error?: string }>();
+let isServerQueueProcessing = false;
+
+async function processServerScrapeQueue() {
+  if (isServerQueueProcessing) return;
+  isServerQueueProcessing = true;
+
+  console.log(`[Server Background Queue Worker] Starting execution of ${serverScrapeQueue.length} queued background scrape tasks...`);
+
+  while (serverScrapeQueue.length > 0) {
+    const item = serverScrapeQueue.shift();
+    if (!item) break;
+
+    serverQueueStatusMap.set(item.id, { status: "processing" });
+
+    try {
+      console.log(`[Server Background Queue Worker] Processing item ${item.id} (${item.url})`);
+      const result = await scrapeInstagramImage(item.url, item.id, false, item.mediaType);
+      
+      if (result.success && result.path) {
+        serverQueueStatusMap.set(item.id, { status: "success", path: result.path });
+      } else {
+        serverQueueStatusMap.set(item.id, { status: "failed", error: result.reason || "Extraction failed" });
+      }
+    } catch (err: any) {
+      serverQueueStatusMap.set(item.id, { status: "failed", error: err.message });
+    }
+
+    // Polite stagger delay between server background scrapes (300ms)
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  isServerQueueProcessing = false;
+  console.log(`[Server Background Queue Worker] Finished all background queue items.`);
+}
+
+// API: Queue Background Scrape Tasks (Offloaded from Client/Service Worker)
+app.post("/api/queue-background-scrape", (req, res) => {
+  const { posts } = req.body;
+  if (!Array.isArray(posts)) {
+    res.status(400).json({ success: false, error: "posts must be an array of { id, url, mediaType } objects." });
+    return;
+  }
+
+  let queuedCount = 0;
+  for (const p of posts) {
+    if (!p.id || !p.url) continue;
+    
+    // Skip if already completed or in queue
+    const current = serverQueueStatusMap.get(p.id);
+    if (current && (current.status === "success" || current.status === "processing")) continue;
+
+    serverQueueStatusMap.set(p.id, { status: "pending" });
+    serverScrapeQueue.push({ id: p.id, url: p.url, mediaType: p.mediaType, attempts: 0 });
+    queuedCount++;
+  }
+
+  // Trigger non-blocking async queue worker
+  processServerScrapeQueue().catch((err) => console.error("[Server Queue Worker Error]:", err));
+
+  res.json({
+    success: true,
+    queuedCount,
+    totalInQueue: serverScrapeQueue.length
+  });
+});
+
+// API: Check status of background queued items
+app.get("/api/background-queue-status", (req, res) => {
+  const ids = typeof req.query.ids === "string" ? req.query.ids.split(",") : [];
+  const results: Record<string, any> = {};
+
+  if (ids.length > 0) {
+    for (const id of ids) {
+      results[id] = serverQueueStatusMap.get(id) || { status: "unknown" };
+    }
+  } else {
+    // Return summary statistics
+    let pending = 0, processing = 0, success = 0, failed = 0;
+    serverQueueStatusMap.forEach((val) => {
+      if (val.status === "pending") pending++;
+      else if (val.status === "processing") processing++;
+      else if (val.status === "success") success++;
+      else if (val.status === "failed") failed++;
+    });
+    results["_summary"] = { pending, processing, success, failed, totalTracked: serverQueueStatusMap.size };
+  }
+
+  res.json({ success: true, queue: results });
 });
 
 // API: Vacuum orphan/deleted thumbnails

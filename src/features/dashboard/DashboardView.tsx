@@ -7,7 +7,7 @@ import {
   checkPostMatchWithSynonyms,
 } from "../../lib/searchSynonyms";
 import { SmartSearchIndicator } from "./components/SmartSearchIndicator";
-import { ForgottenGemsBanner } from "./components/ForgottenGemsBanner";
+
 import { BooleanSearchIndicator } from "./components/BooleanSearchIndicator";
 import {
   hasBooleanOperators,
@@ -333,6 +333,7 @@ export const DashboardView = React.memo(
     const isLoading = usePostStore((state) => state.isLoading);
     const searchQuery = usePostStore((state) => state.searchQuery);
     const setSearchQuery = usePostStore((state) => state.setSearchQuery);
+    const searchPosts = usePostStore((state) => state.searchPosts);
 
     const [isImmersive, setIsImmersive] = useState<boolean>(() => {
       return localStorage.getItem("instasorter_immersive") === "true";
@@ -1017,8 +1018,11 @@ export const DashboardView = React.memo(
           }
           result = tempResult;
         } else {
-          // Smart category & synonym matching across captions, tags, hashtags, notes, and collections
-          if (activeExpandedSearch) {
+          // Full-Text Inverted Search Index query execution
+          const indexedMatches = searchPosts(deferredSearchQuery);
+          if (indexedMatches !== null && indexedMatches.length > 0) {
+            result = indexedMatches;
+          } else if (activeExpandedSearch) {
             result = posts.filter(
               (p) => checkPostMatchWithSynonyms(p, activeExpandedSearch).matches
             );
@@ -1038,7 +1042,7 @@ export const DashboardView = React.memo(
             });
           }
 
-          // Fallback to fuzzy search if no exact or synonym matches found
+          // Fallback to fuzzy search if no exact, synonym, or indexed matches found
           if (result.length === 0) {
             result = fuse.search(deferredSearchQuery).map((r) => r.item);
           }
@@ -2744,8 +2748,6 @@ export const DashboardView = React.memo(
               ) : (
                 <>
                   {/* <DashboardAnalytics posts={posts} /> */}
-
-                  <ForgottenGemsBanner posts={posts} />
 
                   {activeBooleanSearch ? (
                     <BooleanSearchIndicator

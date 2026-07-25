@@ -823,36 +823,39 @@ export const PostCard = React.memo(
 
           {/* ================= CARD BODY (BELOW MEDIA) ================= */}
           {!isImmersive ? (
-            <div className="p-4 flex flex-col gap-2 bg-m3-surface-low flex-1">
-              {/* Header: Username & Date */}
-              <div className="flex items-center justify-between w-full">
-                <span
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCreatorClick?.(post.creatorUsername);
-                  }}
-                  className="font-display font-extrabold text-sm text-m3-on-surface hover:underline cursor-pointer tracking-tight"
-                >
-                  @{highlightText(post.creatorUsername || "creator", "creator")}
-                </span>
-
-                {post.savedAt && (
-                  <span className="font-mono text-[10px] text-m3-outline flex items-center gap-0.5 select-none opacity-75">
-                    <Calendar size={10} />
-                    {new Date(post.savedAt).toLocaleDateString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                    })}
+            <div className="p-4 flex flex-col justify-between gap-2 bg-m3-surface-low flex-1">
+              {/* Header & Caption Group */}
+              <div className="flex flex-col gap-1.5 w-full">
+                {/* Header: Username & Date */}
+                <div className="flex items-center justify-between w-full">
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCreatorClick?.(post.creatorUsername);
+                    }}
+                    className="font-display font-extrabold text-sm text-m3-on-surface hover:underline cursor-pointer tracking-tight"
+                  >
+                    @{highlightText(post.creatorUsername || "creator", "creator")}
                   </span>
+
+                  {post.savedAt && (
+                    <span className="font-mono text-[10px] text-m3-outline flex items-center gap-0.5 select-none opacity-75">
+                      <Calendar size={10} />
+                      {new Date(post.savedAt).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </span>
+                  )}
+                </div>
+
+                {/* Caption Preview */}
+                {displayedCaption && (
+                  <p className="text-xs text-m3-on-surface-variant leading-relaxed line-clamp-2 mt-0.5 min-h-[2rem]">
+                    {displayedCaption}
+                  </p>
                 )}
               </div>
-
-              {/* Caption Preview */}
-              {displayedCaption && (
-                <p className="text-xs text-m3-on-surface-variant leading-relaxed line-clamp-2 mt-0.5">
-                  {displayedCaption}
-                </p>
-              )}
 
               {/* Tags & Inline Adder */}
               <div className="flex flex-wrap items-center gap-1.5 mt-2">

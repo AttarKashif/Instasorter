@@ -468,7 +468,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
     }
 
     return (
-      <div className="flex-1 bg-m3-surface select-none flex flex-col">
+      <div className="flex-1 bg-m3-surface select-none flex flex-col min-h-0 h-full overflow-hidden">
         {/* OPTIMIZED HEADER: Replicates the single-row Material 3 Top App Bar */}
         <header className="border-b border-m3-outline-variant/40 bg-m3-surface shadow-sm z-10 shrink-0 flex flex-col">
           <div className="px-4 md:px-6 py-2.5 flex items-center justify-between">
@@ -856,7 +856,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
                     transition={{ duration: 0.15 }}
                     className="w-full h-full flex flex-col justify-center"
                   >
-                    <div className="flex flex-row items-center justify-center gap-4 h-full min-h-0">
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4 h-full min-h-0 py-1">
                       {mediaTypeData.length === 0 ? (
                         <div className="flex flex-col items-center justify-center text-center p-3 w-full">
                           <ImageIcon size={24} className="text-m3-outline/40 mb-1" />

@@ -201,7 +201,18 @@ export default function App() {
       setInitialSortBy("savedAt");
       setCreatorFilter("");
     }
-    setView(newView);
+
+    if (
+      typeof document !== "undefined" &&
+      "startViewTransition" in document &&
+      localStorage.getItem("instasorter_animations") !== "false"
+    ) {
+      (document as any).startViewTransition(() => {
+        setView(newView);
+      });
+    } else {
+      setView(newView);
+    }
   };
 
   useEffect(() => {
@@ -453,15 +464,16 @@ export default function App() {
         ) : (
           <motion.div
             key={isLoading ? "loading" : view}
-            initial={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, y: 15 } : {}}
-            animate={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 1, y: 0 } : {}}
-            exit={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, y: -10 } : {}}
+            initial={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, scale: 0.985, y: 12 } : {}}
+            animate={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 1, scale: 1, y: 0 } : {}}
+            exit={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, scale: 0.985, y: -8 } : {}}
             transition={
               localStorage.getItem("instasorter_animations") !== "false"
                 ? {
-                    type: "tween",
-                    ease: [0.16, 1, 0.3, 1], // easeOutExpo
-                    duration: 0.48,
+                    type: "spring",
+                    stiffness: 350,
+                    damping: 32,
+                    mass: 0.7,
                   }
                 : { duration: 0 }
             }
