@@ -54,6 +54,12 @@ interface PostState {
   setActivePreviewPost: (post: Post | null) => void;
   isImportModalOpen: boolean;
   setIsImportModalOpen: (open: boolean) => void;
+  isBackgroundOrganizerEnabled: boolean;
+  setIsBackgroundOrganizerEnabled: (enabled: boolean) => void;
+  backgroundOrganizerStatus: "idle" | "running" | "completed" | "error";
+  setBackgroundOrganizerStatus: (status: "idle" | "running" | "completed" | "error") => void;
+  backgroundOrganizerProgress: number;
+  setBackgroundOrganizerProgress: (progress: number) => void;
 }
 
 export const usePostStore = create<PostState>((set, get) => ({
@@ -121,16 +127,9 @@ export const usePostStore = create<PostState>((set, get) => ({
   activePreviewPost: null,
   setActivePreviewPost: (post) => set({ activePreviewPost: post }),
   setPosts: (posts) => {
-    const processedPosts = posts.map((p) => ({
-      ...p,
-      thumbnailUrl:
-        p.thumbnailUrl && p.thumbnailUrl.startsWith("data:")
-          ? "base64-placeholder"
-          : p.thumbnailUrl,
-    }));
     set({
-      posts: processedPosts,
-      searchIndex: buildSearchIndex(processedPosts),
+      posts,
+      searchIndex: buildSearchIndex(posts),
       isLoading: false,
     });
   },
@@ -153,10 +152,6 @@ export const usePostStore = create<PostState>((set, get) => ({
       });
       const lightweightPost = {
         ...post,
-        thumbnailUrl:
-          post.thumbnailUrl && post.thumbnailUrl.startsWith("data:")
-            ? "base64-placeholder"
-            : post.thumbnailUrl,
         collections: Array.from(collections),
       };
       const nextPosts = [...state.posts, lightweightPost];
@@ -172,14 +167,7 @@ export const usePostStore = create<PostState>((set, get) => ({
     set((state) => {
       const nextPosts = state.posts.map((p) => {
         if (p.id === id) {
-          const finalUpdates = { ...updates };
-          if (
-            finalUpdates.thumbnailUrl &&
-            finalUpdates.thumbnailUrl.startsWith("data:")
-          ) {
-            finalUpdates.thumbnailUrl = "base64-placeholder";
-          }
-          return { ...p, ...finalUpdates };
+          return { ...p, ...updates };
         }
         return p;
       });
@@ -385,4 +373,23 @@ export const usePostStore = create<PostState>((set, get) => ({
       ),
       selectedPostIds: [],
     })),
+  isBackgroundOrganizerEnabled: (() => {
+    try {
+      const saved = localStorage.getItem("instasorter_bg_organizer_enabled");
+      return saved === null ? true : saved === "true";
+    } catch {
+      return true;
+    }
+  })(),
+  setIsBackgroundOrganizerEnabled: (enabled) =>
+    set(() => {
+      try {
+        localStorage.setItem("instasorter_bg_organizer_enabled", String(enabled));
+      } catch {}
+      return { isBackgroundOrganizerEnabled: enabled };
+    }),
+  backgroundOrganizerStatus: "idle",
+  setBackgroundOrganizerStatus: (status) => set({ backgroundOrganizerStatus: status }),
+  backgroundOrganizerProgress: 0,
+  setBackgroundOrganizerProgress: (progress) => set({ backgroundOrganizerProgress: progress }),
 }));

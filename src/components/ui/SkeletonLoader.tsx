@@ -12,7 +12,7 @@ const pulseTransition = {
 } as const;
 
 export const SkeletonLoader = ({
-  gridDensity = "double",
+  gridDensity = "list",
 }: SkeletonLoaderProps) => {
   return (
     <motion.div

@@ -671,6 +671,41 @@ export async function retryFailedThumbnails() {
   runThumbnailWorker();
 }
 
+// User-triggered: Targeted, low-intensity re-indexing of missing or failed posts only
+export async function refreshLibraryTargeted() {
+  const allPostsInDb = await db.posts.toArray();
+  const targetedPosts = allPostsInDb.filter((p) => {
+    if (p.id.startsWith("sample-")) return false;
+    const lacksThumbnail = !p.thumbnailUrl || p.thumbnailUrl.trim() === "" || p.thumbnailUrl.includes("placeholder");
+    const isFailed = p.thumbnailStatus === "failed";
+    const isPending = p.thumbnailStatus === "pending" || !p.thumbnailStatus;
+    return isFailed || isPending || lacksThumbnail;
+  });
+
+  if (targetedPosts.length === 0) {
+    return { count: 0, message: "All posts in library already have active thumbnails!" };
+  }
+
+  for (const post of targetedPosts) {
+    const cleanUrl = (post.postUrl || "").trim();
+    const isHttp = cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://");
+    const updatedPost: Partial<Post> = {
+      thumbnailStatus: isHttp ? "pending" : "success",
+      thumbnailAttempts: 0,
+    };
+    await db.posts.update(post.id, updatedPost);
+    usePostStore.getState().updatePost(post.id, updatedPost);
+  }
+
+  speedMode = "eco";
+  globalThrottleUntil = null;
+  isPaused = false;
+  notifyUI();
+  runThumbnailWorker();
+
+  return { count: targetedPosts.length, message: `Targeted re-indexing started for ${targetedPosts.length} posts.` };
+}
+
 // User-triggered: Retry single failed post
 export async function retrySingleThumbnail(postId: string) {
   const post = await db.posts.get(postId);

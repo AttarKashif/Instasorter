@@ -589,7 +589,10 @@ export const PostCard = React.memo(
           onTouchEnd={endHold}
           onTouchMove={endHold}
           whileTap={{ scale: 0.98 }}
-          transition={{ type: "spring", stiffness: 400, damping: 25 }}
+          transition={{
+            layout: { type: "spring", stiffness: 280, damping: 28 },
+            default: { type: "spring", stiffness: 400, damping: 25 }
+          }}
           style={subtleBg ? { backgroundColor: subtleBg } : undefined}
           className={`relative rounded-[20px] overflow-hidden cursor-pointer border transition-all duration-300 group/card flex flex-col hover:-translate-y-1 hover:shadow-[0_12px_30px_-4px_rgba(0,0,0,0.08)] hover:z-10 ${
             post.visibility === "hidden"
@@ -689,15 +692,25 @@ export const PostCard = React.memo(
                   onToggleSelect(e);
                 }}
               >
-                <div
+                <motion.div
+                  whileHover={{ scale: 1.15 }}
+                  whileTap={{ scale: 0.9 }}
+                  animate={isSelected ? { scale: [0.95, 1.15, 1.05, 1] } : { scale: 1 }}
+                  transition={{ type: "spring", stiffness: 420, damping: 16 }}
                   className={`w-6 h-6 rounded-full flex items-center justify-center transition-all duration-200 border shadow-md backdrop-blur-md cursor-pointer ${
                     isSelected
-                      ? "bg-m3-primary border-m3-primary text-m3-on-primary scale-110 opacity-100"
-                      : "bg-black/30 border-white/25 text-white hover:border-white hover:scale-105 opacity-0 group-hover/card:opacity-100"
+                      ? "bg-m3-primary border-m3-primary text-m3-on-primary opacity-100"
+                      : "bg-black/30 border-white/25 text-white hover:border-white opacity-0 group-hover/card:opacity-100"
                   }`}
                 >
-                  {isSelected && <Check size={12} className="stroke-[3]" />}
-                </div>
+                  <motion.div
+                    initial={{ scale: 0 }}
+                    animate={isSelected ? { scale: 1 } : { scale: 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                  >
+                    <Check size={12} className="stroke-[3]" />
+                  </motion.div>
+                </motion.div>
               </div>
 
               {/* Media indicator badges */}

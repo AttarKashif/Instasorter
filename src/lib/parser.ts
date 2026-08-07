@@ -860,10 +860,7 @@ export const normalizeInstagramPost = (raw: any): Post => {
     }
   }
 
-  // Set gorgeous, context-aware placeholder cover from Unsplash if we have no valid thumbnail
-  if (!thumbnailUrl) {
-    thumbnailUrl = getDynamicCoverByKeywords(caption, tags, id);
-  }
+
 
   return {
     id,

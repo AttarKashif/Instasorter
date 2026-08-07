@@ -83,3 +83,23 @@ To avoid low-quality tech jargon, Instasorter uses simple, humble, and literal h
 *   Use "**Star**" or "**Favorite**" instead of overly complex metadata jargon.
 *   Use "**Collections**" or "**Folders**" instead of technical database tag terminology.
 *   Use "**Background Downloader**" instead of raw engine telemetry terms.
+
+---
+
+## 🛠️ Integrated AI Engineering Workflow Skills (Matt Pocock / AI Hero)
+This project integrates Matt Pocock's AI Hero agent skills to ensure high-rigor, disciplined engineering workflows:
+
+1. **`/grill-with-docs` (Pre-Implementation Architecture Review)**:
+   - Before implementing complex multi-module features, cross-examine proposed changes against existing system rules, types, and official documentation.
+   - Challenge assumptions, check for edge cases, and verify dependency compatibility before making destructive changes.
+
+2. **`/to-spec` & `/to-tickets` (Requirement Decomposition)**:
+   - Break down ambiguous or broad user feature requests into clear functional specs and concrete, atomic implementation tasks.
+   - Execute each step sequentially, verifying each unit before proceeding.
+
+3. **`/code-review` (Rigor & Zero-Slop Validation)**:
+   - Enforce strict TypeScript safety (no untyped `any` parameters), robust error handling, and clean responsive Tailwind layout styling.
+   - Run type checks (`tsc --noEmit`) and test suites (`vitest`) after every major code modification.
+
+4. **`/handoff` (Session Continuity)**:
+   - Provide structured, high-context summaries at the end of each task detailing modified files, verified test results, and next actions to ensure seamless session transitions.

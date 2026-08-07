@@ -19,11 +19,9 @@ import {
   Download,
 } from "lucide-react";
 import { offloadPendingToBackgroundServer } from "../../../lib/thumbnailWorker";
-import { requestWakeLock, releaseWakeLock, isIOSDevice } from "../../../lib/wakeLock";
 import { db } from "../../../lib/db";
 import { usePostStore } from "../../../store/useStore";
 import { StorageIndicator } from "./StorageIndicator";
-import { ForgottenGemsBanner } from "../../dashboard/components/ForgottenGemsBanner";
 
 interface MaintenanceTabProps {
   handleConsolidateTags: () => void;
@@ -54,48 +52,8 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
 }) => {
   const setPosts = usePostStore((state) => state.setPosts);
   const posts = usePostStore((state) => state.posts);
-  const [isPersistent, setIsPersistent] = useState<boolean>(false);
-  const [wakeLockActive, setWakeLockActive] = useState<boolean>(false);
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>("all");
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persisted) {
-      navigator.storage.persisted().then((persisted) => {
-        setIsPersistent(persisted);
-      });
-    }
-  }, []);
-
-  const handleRequestPersistence = async () => {
-    if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persist) {
-      const granted = await navigator.storage.persist();
-      setIsPersistent(granted);
-      if (granted) {
-        setToast({ type: "success", message: "Persistent Storage Granted! Safe from eviction." });
-      } else {
-        setToast({ type: "error", message: "Storage Persistence denied by browser settings." });
-      }
-    } else {
-      setToast({ type: "error", message: "Storage Persistence API not supported on this browser." });
-    }
-  };
-
-  const handleToggleWakeLock = async () => {
-    if (wakeLockActive) {
-      await releaseWakeLock();
-      setWakeLockActive(false);
-      setToast({ type: "success", message: "Screen Wake Lock released." });
-    } else {
-      const success = await requestWakeLock();
-      if (success) {
-        setWakeLockActive(true);
-        setToast({ type: "success", message: "Screen Stay-Awake active! Screen will stay on during batch crawls." });
-      } else {
-        setToast({ type: "error", message: "Could not acquire Wake Lock on this device." });
-      }
-    }
-  };
 
   const handleRestoreDatabase = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -194,12 +152,7 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
       {/* Visual Storage Usage & Quota Monitor */}
       <StorageIndicator />
 
-      {/* Forgotten Gems & Memory Capsule Engine (Shown on All or Optimization) */}
-      {(activeCategory === "all" || activeCategory === "optimization") && (
-        <div className="w-full">
-          <ForgottenGemsBanner posts={posts} />
-        </div>
-      )}
+
 
       {/* Downloader Compact Status Banner (Shown on All or Media) */}
       {(activeCategory === "all" || activeCategory === "media") && (
@@ -351,37 +304,7 @@ export const MaintenanceTab: React.FC<MaintenanceTabProps> = React.memo(({
                 </button>
               </div>
 
-              {/* iOS Stay Awake Lock */}
-              <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
-                    <Sun size={16} />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <h6 className="text-xs font-bold text-m3-on-surface truncate">Screen Stay-Awake</h6>
-                      {isIOSDevice() && (
-                        <span className="text-[8px] font-bold px-1 rounded bg-amber-500/15 text-amber-600 font-mono">
-                          iOS
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[10px] text-m3-on-surface-variant truncate">
-                      Keep mobile display active during batch media scraping
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={handleToggleWakeLock}
-                  className={`px-3 py-1.5 text-xs font-bold rounded-lg shrink-0 transition-all cursor-pointer active:scale-95 border ${
-                    wakeLockActive
-                      ? "bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30"
-                      : "bg-m3-surface-variant text-m3-on-surface-variant border-transparent"
-                  }`}
-                >
-                  {wakeLockActive ? "Active" : "Enable"}
-                </button>
-              </div>
+
 
               {/* PWA Cache Revalidate */}
               <div className="bg-m3-surface-low border border-m3-outline-variant/20 rounded-xl p-3.5 flex items-center justify-between gap-3 hover:border-m3-outline-variant/40 transition-all">

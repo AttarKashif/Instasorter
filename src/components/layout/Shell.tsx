@@ -20,6 +20,9 @@ import {
   Smartphone,
   CheckCircle2,
   CloudDownload,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { usePostStore } from "../../store/useStore";
@@ -33,6 +36,22 @@ import {
 } from "../../lib/thumbnailWorker";
 
 type ViewType = "home" | "analytics" | "settings" | "grouped";
+
+const renderKeycaps = (keysText: string) => {
+  const parts = keysText.split(" / ");
+  return (
+    <div className="flex items-center gap-1 select-none shrink-0">
+      {parts.map((p, idx) => (
+        <span key={idx} className="flex items-center gap-1">
+          {idx > 0 && <span className="text-[10px] text-m3-outline font-sans font-medium">or</span>}
+          <kbd className="font-mono text-[9px] font-black text-m3-on-surface bg-m3-surface border-b-[2.5px] border-x border-t border-m3-outline-variant/80 px-2 py-0.5 rounded-md shadow-xs min-w-[20px] h-[22px] inline-flex items-center justify-center text-center leading-none">
+            {p}
+          </kbd>
+        </span>
+      ))}
+    </div>
+  );
+};
 
 interface ShellProps {
   children: ReactNode;
@@ -58,6 +77,14 @@ export const Shell = ({
   const setActivePreviewPost = usePostStore((state) => state.setActivePreviewPost);
   const setIsImportModalOpen = usePostStore((state) => state.setIsImportModalOpen);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("isSidebarCollapsed") === "true";
+    }
+    return false;
+  });
+  const [hoveredNavId, setHoveredNavId] = useState<string | null>(null);
+  const [hoveredMobileNavId, setHoveredMobileNavId] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== "undefined" ? navigator.onLine : true);
   const [isInstallable, setIsInstallable] = useState(() => typeof window !== "undefined" && Boolean(window.deferredPrompt));
   const [isStandalone, setIsStandalone] = useState(() => {
@@ -268,17 +295,54 @@ export const Shell = ({
 
       {/* Mobile Sticky Top Header removed as requested */}
 
-      {/* Material 3 Desktop Navigation Drawer / Rail */}
-      <nav className="hidden md:flex md:w-20 lg:w-72 bg-m3-surface border-r border-m3-outline-variant/40 shadow-sm z-10 px-2 lg:px-4 py-8 flex-col justify-between sticky top-0 h-screen shrink-0 transition-all duration-300">
-        <div className="flex flex-col gap-8">
-          {/* Navigation Items */}
-          <div className="flex flex-col gap-1">
-            {isImporting && (
-              <div className="mx-1 lg:mx-4 my-2 p-3 bg-m3-primary-container/30 rounded-2xl flex items-center justify-center lg:justify-start gap-3 text-xs text-m3-on-primary-container" title={importMessage || "Importing..."}>
-                <RefreshCw className="animate-spin shrink-0" size={16} />
-                <span className="truncate hidden lg:inline">
-                  {importMessage || "Importing..."}
+      {/* Material 3 Desktop Navigation Drawer / Rail (Collapsible with smooth Motion Spring) */}
+      <motion.nav
+        animate={{ width: isSidebarCollapsed ? 84 : 288 }}
+        transition={{ type: "spring", stiffness: 280, damping: 25 }}
+        className="hidden md:flex bg-m3-surface border-r border-m3-outline-variant/40 shadow-sm z-10 p-4 py-8 flex-col justify-between sticky top-0 h-screen shrink-0 overflow-hidden select-none"
+      >
+        <div className="flex flex-col gap-6">
+          {/* Brand & Collapse Header Toggle */}
+          <div className={`flex items-center ${isSidebarCollapsed ? "justify-center" : "justify-between"} px-1 h-10`}>
+            {!isSidebarCollapsed && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                className="flex items-center gap-2"
+              >
+                <div className="w-8 h-8 rounded-xl bg-m3-primary text-m3-on-primary flex items-center justify-center font-display font-black text-xs shadow-xs">
+                  IS
+                </div>
+                <span className="font-display font-bold text-base text-m3-on-surface tracking-tight">
+                  Instasorter
                 </span>
+              </motion.div>
+            )}
+            
+            <button
+              onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+              className="p-2 rounded-full hover:bg-m3-surface-variant/40 text-m3-on-surface-variant cursor-pointer transition-colors active:scale-95"
+              title={isSidebarCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+            >
+              {isSidebarCollapsed ? (
+                <ChevronRight size={18} />
+              ) : (
+                <ChevronLeft size={18} />
+              )}
+            </button>
+          </div>
+
+          {/* Navigation Items */}
+          <div className="flex flex-col gap-1.5">
+            {isImporting && (
+              <div className={`mx-1 my-2 p-3 bg-m3-primary-container/30 rounded-2xl flex items-center ${isSidebarCollapsed ? "justify-center" : "justify-start"} gap-3 text-xs text-m3-on-primary-container`} title={importMessage || "Importing..."}>
+                <RefreshCw className="animate-spin shrink-0 text-m3-primary" size={16} />
+                {!isSidebarCollapsed && (
+                  <span className="truncate font-sans font-medium">
+                    {importMessage || "Importing..."}
+                  </span>
+                )}
               </div>
             )}
             {navItems.map((item) => {
@@ -288,10 +352,25 @@ export const Shell = ({
                 <button
                   key={item.id}
                   onClick={() => onNavigate(item.id)}
-                  className="group relative flex items-center justify-center lg:justify-start gap-4 p-3.5 lg:px-4 lg:py-3.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer text-center lg:text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary"
+                  onMouseEnter={() => setHoveredNavId(item.id)}
+                  onMouseLeave={() => setHoveredNavId(null)}
+                  className={`group relative flex items-center ${isSidebarCollapsed ? "justify-center" : "justify-start"} gap-4 p-3.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary w-full`}
                   title={item.label}
                 >
-                  {/* M3 Active Indicator Pill */}
+                  {/* Sliding hover pill (KokonutUI Style) */}
+                  {hoveredNavId === item.id && !isActive && (
+                    <motion.div
+                      layoutId="hover-nav-pill"
+                      className="absolute inset-0 bg-m3-surface-variant/20 rounded-full -z-10"
+                      transition={{
+                        type: "spring",
+                        stiffness: 400,
+                        damping: 26,
+                      }}
+                    />
+                  )}
+
+                  {/* Active Indicator Pill */}
                   {isActive && (
                     <motion.div
                       layoutId="active-nav-pill"
@@ -306,75 +385,91 @@ export const Shell = ({
 
                   <Icon
                     size={20}
-                    className={`shrink-0 transition-colors duration-200 ${
+                    className={`shrink-0 transition-transform duration-300 group-hover:scale-125 group-hover:rotate-6 ${
                       isActive
                         ? "text-m3-on-primary-container stroke-[2.5]"
                         : "text-m3-on-surface-variant group-hover:text-m3-on-surface"
                     }`}
                   />
 
-                  <div className="flex flex-col hidden lg:flex">
-                    <span
-                      className={`transition-colors duration-200 ${
-                        isActive
-                          ? "text-m3-on-primary-container font-bold"
-                          : "text-m3-on-surface-variant group-hover:text-m3-on-surface"
-                      }`}
+                  {!isSidebarCollapsed && (
+                    <motion.div
+                      initial={{ opacity: 0, x: -6 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -6 }}
+                      className="flex flex-col"
                     >
-                      {item.label}
-                    </span>
-                  </div>
+                      <span
+                        className={`transition-colors duration-200 whitespace-nowrap ${
+                          isActive
+                            ? "text-m3-on-primary-container font-bold font-display"
+                            : "text-m3-on-surface-variant group-hover:text-m3-on-surface font-sans"
+                        }`}
+                      >
+                        {item.label}
+                      </span>
+                    </motion.div>
+                  )}
                 </button>
               );
             })}
-            {smartCollections.length > 0 && (
-              <div className="mt-4 px-4 hidden lg:block">
-                <p className="text-xs font-semibold text-m3-outline mb-2">
+
+            {!isSidebarCollapsed && smartCollections.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="mt-4 px-4 hidden lg:block"
+              >
+                <p className="text-[10px] uppercase tracking-wider font-extrabold text-m3-outline mb-2 font-mono">
                   {tShell.smartCollections}
                 </p>
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-1.5">
                   {smartCollections.slice(0, 5).map((c) => (
                     <div
                       key={c.id}
-                      className="text-xs text-m3-on-surface-variant px-2 py-1 rounded hover:bg-m3-surface-variant/30 cursor-pointer"
+                      className="text-xs font-sans text-m3-on-surface-variant px-2.5 py-1.5 rounded-lg hover:bg-m3-surface-variant/20 cursor-pointer transition-colors"
                     >
                       {c.name}
                     </div>
                   ))}
                 </div>
-              </div>
+              </motion.div>
             )}
           </div>
         </div>
 
         {/* Footer info & PWA status matching M3's modest branding style */}
-        <div className="px-1 lg:px-4 py-3 border-t border-m3-outline-variant/20 flex flex-col gap-2 mt-auto">
+        <div className={`px-1 py-3 border-t border-m3-outline-variant/20 flex flex-col gap-2.5 mt-auto ${isSidebarCollapsed ? "items-center" : ""}`}>
           {isInstallable && (
             <button
               onClick={handleInstallClick}
-              className="w-full py-2 px-2 lg:px-3 rounded-2xl bg-m3-primary-container text-m3-on-primary-container hover:bg-m3-primary hover:text-m3-on-primary text-xs font-semibold flex items-center justify-center lg:justify-between transition-all duration-200 cursor-pointer shadow-xs group"
+              className={`py-2 px-3 rounded-2xl bg-m3-primary-container text-m3-on-primary-container hover:bg-m3-primary hover:text-m3-on-primary text-xs font-semibold flex items-center justify-center ${isSidebarCollapsed ? "" : "lg:justify-between"} transition-all duration-200 cursor-pointer shadow-xs group w-full`}
               title="Install Desktop App"
             >
               <div className="flex items-center gap-2">
                 <Download size={14} className="group-hover:translate-y-0.5 transition-transform shrink-0" />
-                <span className="hidden lg:inline">Install Desktop App</span>
+                {!isSidebarCollapsed && <span className="hidden lg:inline">Install App</span>}
               </div>
-              <span className="text-[10px] uppercase tracking-wider opacity-70 font-mono hidden lg:inline">PWA</span>
+              {!isSidebarCollapsed && (
+                <span className="text-[9px] uppercase tracking-wider opacity-70 font-mono hidden lg:inline bg-m3-primary/10 px-1.5 py-0.5 rounded-sm">PWA</span>
+              )}
             </button>
           )}
 
-          {isStandalone && (
-            <div className="px-2 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-medium flex items-center justify-center lg:justify-start gap-2" title="Standalone App Active">
-              <CheckCircle2 size={13} className="shrink-0" />
+          {isStandalone && !isSidebarCollapsed && (
+            <div className="px-2.5 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[11px] font-medium flex items-center justify-center lg:justify-start gap-2" title="Standalone App Active">
+              <CheckCircle2 size={13} className="shrink-0 text-emerald-500" />
               <span className="hidden lg:inline">Standalone Active</span>
             </div>
           )}
 
-          <p className="text-[11px] font-mono text-m3-outline text-center lg:text-left hidden lg:block">
-            {tShell.footerText}
-          </p>
+          {!isSidebarCollapsed && (
+            <p className="text-[10px] font-mono text-m3-outline text-center lg:text-left hidden lg:block leading-relaxed">
+              {tShell.footerText}
+            </p>
+          )}
         </div>
-      </nav>
+      </motion.nav>
 
       {/* Main Content Area */}
       <main className="flex-1 min-w-0 overflow-hidden flex flex-col relative pb-20 md:pb-0">
@@ -410,8 +505,19 @@ export const Shell = ({
             <button
               key={item.id}
               onClick={() => onNavigate(item.id)}
+              onMouseEnter={() => setHoveredMobileNavId(item.id)}
+              onMouseLeave={() => setHoveredMobileNavId(null)}
               className="flex flex-col items-center justify-center w-[72px] h-[52px] relative cursor-pointer group focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary z-0"
             >
+              {/* Sliding hover backdrop (KokonutUI Style) */}
+              {hoveredMobileNavId === item.id && !isActive && (
+                <motion.div
+                  layoutId="hover-mobile-nav"
+                  className="absolute inset-0 bg-m3-surface-variant/30 rounded-[16px] -z-10"
+                  transition={{ type: "spring", stiffness: 400, damping: 26 }}
+                />
+              )}
+
               {isActive && (
                 <motion.div
                   layoutId="active-mobile-nav"
@@ -502,49 +608,37 @@ export const Shell = ({
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.navHome}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        1
-                      </kbd>
+                      {renderKeycaps("1")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.navAnalytics}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        2
-                      </kbd>
+                      {renderKeycaps("2")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.navGrouped}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        3
-                      </kbd>
+                      {renderKeycaps("3")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.navImport}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        4
-                      </kbd>
+                      {renderKeycaps("4")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.navSettings}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        5
-                      </kbd>
+                      {renderKeycaps("5")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.toggleGuide}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        ?
-                      </kbd>
+                      {renderKeycaps("?")}
                     </div>
                   </div>
                 </div>
@@ -559,49 +653,37 @@ export const Shell = ({
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.navFocus}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        Arrows / J / K
-                      </kbd>
+                      {renderKeycaps("Arrows / J / K")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.openDetails}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        Enter / Space
-                      </kbd>
+                      {renderKeycaps("Enter / Space")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.toggleStar}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        F
-                      </kbd>
+                      {renderKeycaps("F")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.toggleArchive}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        A
-                      </kbd>
+                      {renderKeycaps("A")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.toggleReadLater}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        R
-                      </kbd>
+                      {renderKeycaps("R")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.copyLink}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        C
-                      </kbd>
+                      {renderKeycaps("C")}
                     </div>
                   </div>
                 </div>
@@ -616,17 +698,13 @@ export const Shell = ({
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.nextPrev}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        Right / Left Arrows
-                      </kbd>
+                      {renderKeycaps("Right Arrow / Left Arrow")}
                     </div>
                     <div className="flex items-center justify-between p-2 rounded-xl bg-m3-surface-variant/15 border border-m3-outline-variant/5">
                       <span className="text-xs font-medium text-m3-on-surface-variant">
                         {tShortcuts.closeDetail}
                       </span>
-                      <kbd className="px-2 py-0.5 rounded bg-m3-surface-variant text-m3-on-surface font-mono text-[11px] font-bold border border-m3-outline-variant/30 shadow-xs">
-                        Escape
-                      </kbd>
+                      {renderKeycaps("Escape")}
                     </div>
                   </div>
                 </div>

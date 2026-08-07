@@ -22,6 +22,7 @@ import { Toaster } from "react-hot-toast";
 import { SkeletonLoader } from "./components/ui/SkeletonLoader";
 import { OnboardingView } from "./components/ui/OnboardingView";
 import { startBackgroundAutoOrganizer, stopBackgroundAutoOrganizer } from "./lib/backgroundAutoOrganizerWorker";
+import { triggerHaptic } from "./lib/haptic";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 
 export default function App() {
@@ -57,18 +58,45 @@ export default function App() {
   const [view, setView] = useState<
     "home" | "analytics" | "settings" | "grouped"
   >("home");
+  const [scrollProgress, setScrollProgress] = useState(0);
   const [gridDensity, setGridDensity] = useState<"single" | "double" | "list">(
     () => {
       const saved = localStorage.getItem("gridDensity");
       return saved === "single" || saved === "double" || saved === "list"
         ? saved
-        : "double";
+        : "list";
     },
   );
 
   useEffect(() => {
     localStorage.setItem("currentView", view);
+    setScrollProgress(0);
   }, [view]);
+
+  useEffect(() => {
+    const handleScrollCapture = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        target.classList &&
+        target.classList.contains("overflow-y-auto") &&
+        target.classList.contains("overscroll-contain")
+      ) {
+        const { scrollTop, scrollHeight, clientHeight } = target;
+        const totalScroll = scrollHeight - clientHeight;
+        if (totalScroll > 0) {
+          setScrollProgress(scrollTop / totalScroll);
+        } else {
+          setScrollProgress(0);
+        }
+      }
+    };
+
+    window.addEventListener("scroll", handleScrollCapture, true);
+    return () => {
+      window.removeEventListener("scroll", handleScrollCapture, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.persist) {
@@ -78,18 +106,38 @@ export default function App() {
         }
       });
     }
+
+    // Intercept clicks on interactive elements for global tactile haptic feedback
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const interactiveElement = target.closest("button, a, [role='button'], [role='tab'], .clickable");
+      if (interactiveElement) {
+        triggerHaptic("light");
+      }
+    };
+
+    document.addEventListener("click", handleGlobalClick, { capture: true, passive: true });
+    return () => {
+      document.removeEventListener("click", handleGlobalClick, { capture: true });
+    };
   }, []);
 
   useEffect(() => {
     localStorage.setItem("gridDensity", gridDensity);
   }, [gridDensity]);
 
+  const isBackgroundOrganizerEnabled = usePostStore((state) => state.isBackgroundOrganizerEnabled);
+
   useEffect(() => {
-    startBackgroundAutoOrganizer();
+    if (isBackgroundOrganizerEnabled) {
+      startBackgroundAutoOrganizer();
+    } else {
+      stopBackgroundAutoOrganizer();
+    }
     return () => {
       stopBackgroundAutoOrganizer();
     };
-  }, []);
+  }, [isBackgroundOrganizerEnabled]);
   const [creatorFilter, setCreatorFilter] = useState("");
   const [initialSelectedCollections, setInitialSelectedCollections] = useState<
     string[]
@@ -448,6 +496,18 @@ export default function App() {
       }
     >
       <Toaster position="bottom-right" toastOptions={{ style: { background: "var(--m3-surface-low)", color: "var(--m3-on-surface)", border: "1px solid var(--m3-outline-variant)", borderRadius: "16px", boxShadow: "var(--shadow-glass-md)" } }} />
+      
+      {/* Subtle reading progress bar tracking viewport scroll position */}
+      <div className="fixed top-0 left-0 right-0 h-[2.5px] bg-transparent z-50 pointer-events-none">
+        <motion.div
+          className="h-full bg-m3-primary/85 dark:bg-m3-primary/95"
+          style={{ scaleX: scrollProgress, transformOrigin: "left" }}
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: scrollProgress }}
+          transition={{ type: "spring", stiffness: 350, damping: 30, restDelta: 0.001 }}
+        />
+      </div>
+
       <AnimatePresence mode="wait">
         {isResetting ? (
           <motion.div
@@ -464,16 +524,16 @@ export default function App() {
         ) : (
           <motion.div
             key={isLoading ? "loading" : view}
-            initial={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, scale: 0.985, y: 12 } : {}}
-            animate={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 1, scale: 1, y: 0 } : {}}
-            exit={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, scale: 0.985, y: -8 } : {}}
+            initial={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, x: 24, scale: 0.99 } : {}}
+            animate={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 1, x: 0, scale: 1 } : {}}
+            exit={localStorage.getItem("instasorter_animations") !== "false" ? { opacity: 0, x: -24, scale: 0.99 } : {}}
             transition={
               localStorage.getItem("instasorter_animations") !== "false"
                 ? {
                     type: "spring",
-                    stiffness: 350,
-                    damping: 32,
-                    mass: 0.7,
+                    stiffness: 320,
+                    damping: 30,
+                    mass: 0.8,
                   }
                 : { duration: 0 }
             }

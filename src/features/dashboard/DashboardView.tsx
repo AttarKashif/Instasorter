@@ -1,18 +1,3 @@
-import {
-  useSearchHistory,
-  RecentSearchHistory,
-} from "./components/RecentSearchHistory";
-import {
-  expandSearchQuery,
-  checkPostMatchWithSynonyms,
-} from "../../lib/searchSynonyms";
-import { SmartSearchIndicator } from "./components/SmartSearchIndicator";
-
-import { BooleanSearchIndicator } from "./components/BooleanSearchIndicator";
-import {
-  hasBooleanOperators,
-  filterPostsWithBooleanQuery,
-} from "../../lib/booleanSearch";
 import { useDebounce } from "../../hooks/useDebounce";
 import { useFullPost } from "../../hooks/useFullPost";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -32,8 +17,8 @@ import { usePostStore } from "../../store/useStore";
 import { PostCard } from "../../components/ui/PostCard";
 import { PostCardSkeleton } from "../../components/ui/PostCardSkeleton";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { EmptyLibraryIllustration, EmptyFilterIllustration } from "../../components/ui/EmptyStateIllustrations";
 import { TelegramQuickPeek } from "../../components/ui/TelegramQuickPeek";
+import { FullScreenMediaViewer } from "../../components/ui/FullScreenMediaViewer";
 import { InstagramImage } from "../../components/ui/InstagramImage";
 import { AddBookmarkModal } from "../../components/ui/AddBookmarkModal";
 import { SmartRulesManager } from "../../components/ui/SmartRulesManager";
@@ -437,14 +422,7 @@ export const DashboardView = React.memo(
     }, [localSearchQuery, searchQuery, setSearchQuery]);
     const deferredSearchQuery = useDebounce(localSearchQuery, 100);
 
-    const {
-      historyItems,
-      saveQuery: saveSearchQuery,
-      togglePin: handleTogglePinSearch,
-      deleteItem: handleDeleteSearchItem,
-      clearAll: handleClearAllSearchHistory,
-    } = useSearchHistory();
-    const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
+
 
     const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
     const exportDropdownRef = useRef<HTMLDivElement>(null);
@@ -475,6 +453,7 @@ export const DashboardView = React.memo(
     const [endDate, setEndDate] = useState(initialEndDate);
     const [peekPost, setPeekPost] = useState<Post | null>(null);
     const [detailPost, setDetailPost] = useState<Post | null>(null);
+    const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null);
     const [keyboardFocusedId, setKeyboardFocusedId] = useState<string | null>(
       null,
     );
@@ -932,26 +911,10 @@ export const DashboardView = React.memo(
       [posts],
     );
 
-    // Active expanded query computation for category & synonym matching
-    const activeExpandedSearch = useMemo(() => {
-      if (!deferredSearchQuery) return null;
-      return expandSearchQuery(deferredSearchQuery);
-    }, [deferredSearchQuery]);
-
-    // Active boolean query evaluation (AND, OR, NOT, parentheses)
-    const activeBooleanSearch = useMemo(() => {
-      if (deferredSearchQuery && hasBooleanOperators(deferredSearchQuery)) {
-        return filterPostsWithBooleanQuery(posts, deferredSearchQuery);
-      }
-      return null;
-    }, [deferredSearchQuery, posts]);
-
     // Main filter/sort computation
     const filteredPosts = useMemo(() => {
       let result = posts;
-      if (activeBooleanSearch) {
-        result = activeBooleanSearch.filteredPosts;
-      } else if (deferredSearchQuery) {
+      if (deferredSearchQuery) {
         const parsed = parseSearchQuery(deferredSearchQuery);
         if (parsed.isPrefix) {
           let tempResult = [...posts];
@@ -972,12 +935,9 @@ export const DashboardView = React.memo(
                 (p.caption || "").toLowerCase().includes(valLower),
               );
             } else if (prefix === "tag" || prefix === "hashtag") {
-              const tagExpanded = expandSearchQuery(value);
               tempResult = tempResult.filter((p) => {
                 const pTags = [...(p.tags || []), ...(p.hashtags || [])].map((t) => t.toLowerCase());
-                return tagExpanded.expandedTerms.some((term) =>
-                  pTags.some((pt) => pt.includes(term))
-                );
+                return pTags.some((pt) => pt.includes(valLower));
               });
             } else if (prefix === "collection" || prefix === "folder") {
               tempResult = tempResult.filter((p) =>
@@ -1011,9 +971,12 @@ export const DashboardView = React.memo(
           });
 
           if (parsed.generalText) {
-            const genExpanded = expandSearchQuery(parsed.generalText);
-            tempResult = tempResult.filter(
-              (p) => checkPostMatchWithSynonyms(p, genExpanded).matches
+            const genLower = parsed.generalText.toLowerCase();
+            tempResult = tempResult.filter((p) =>
+              (p.caption || "").toLowerCase().includes(genLower) ||
+              (p.creatorUsername || "").toLowerCase().includes(genLower) ||
+              (p.creatorName || "").toLowerCase().includes(genLower) ||
+              (p.notes || "").toLowerCase().includes(genLower)
             );
           }
           result = tempResult;
@@ -1022,10 +985,6 @@ export const DashboardView = React.memo(
           const indexedMatches = searchPosts(deferredSearchQuery);
           if (indexedMatches !== null && indexedMatches.length > 0) {
             result = indexedMatches;
-          } else if (activeExpandedSearch) {
-            result = posts.filter(
-              (p) => checkPostMatchWithSynonyms(p, activeExpandedSearch).matches
-            );
           } else {
             const valLower = deferredSearchQuery.toLowerCase();
             result = posts.filter((p) => {
@@ -1168,6 +1127,11 @@ export const DashboardView = React.memo(
       visibilityFilter,
       deferredCreatorFilter,
     ]);
+
+    const handleOpenFullscreen = useCallback((post: Post) => {
+      const idx = filteredPosts.findIndex(p => p.id === post.id);
+      setFullscreenIndex(idx >= 0 ? idx : 0);
+    }, [filteredPosts]);
 
     const [visibleCount, setVisibleCount] = useState(48);
 
@@ -1789,15 +1753,9 @@ export const DashboardView = React.memo(
                           placeholder="What are you looking for? (caption, tag, creator)"
                           value={localSearchQuery}
                           onChange={(e) => setLocalSearchQuery(e.target.value)}
-                          onFocus={() => setIsSearchDropdownOpen(true)}
-                          onBlur={() =>
-                            setTimeout(() => setIsSearchDropdownOpen(false), 200)
-                          }
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
-                              saveSearchQuery(localSearchQuery);
                               (e.target as HTMLInputElement).blur();
-                              setIsSearchDropdownOpen(false);
                             }
                           }}
                           className="pl-7 pr-7 py-1 w-full border border-m3-outline-variant/30 bg-m3-surface-container-low text-m3-on-surface hover:border-m3-outline focus:border-m3-primary focus:bg-m3-surface rounded-lg text-[11px] focus:outline-none transition-all h-8 font-sans"
@@ -1813,24 +1771,6 @@ export const DashboardView = React.memo(
                             <X size={12} />
                           </button>
                         )}
-
-                        <AnimatePresence>
-                          {isSearchDropdownOpen && (
-                            <RecentSearchHistory
-                              currentQuery={localSearchQuery}
-                              historyItems={historyItems}
-                              onSelectQuery={(q, save) => {
-                                setLocalSearchQuery(q);
-                                setSearchQuery(q);
-                                if (save) saveSearchQuery(q);
-                              }}
-                              onClose={() => setIsSearchDropdownOpen(false)}
-                              onTogglePin={handleTogglePinSearch}
-                              onDeleteItem={handleDeleteSearchItem}
-                              onClearAll={handleClearAllSearchHistory}
-                            />
-                          )}
-                        </AnimatePresence>
                       </div>
 
 
@@ -1887,39 +1827,60 @@ export const DashboardView = React.memo(
                       </button>
 
                       {/* Layout Selector */}
-                      <div className="flex items-center bg-m3-surface-variant/20 border border-m3-outline-variant/20 rounded-lg p-0.5 shrink-0 h-8">
+                      <div className="flex items-center bg-m3-surface-variant/20 border border-m3-outline-variant/20 rounded-lg p-0.5 shrink-0 h-8 relative z-0">
                         <button
                           onClick={() => setGridDensity("single")}
-                          className={`flex items-center justify-center w-8 h-7 rounded-md transition-all cursor-pointer ${
+                          className={`relative flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-300 cursor-pointer ${
                             gridDensity === "single"
-                              ? "bg-m3-primary text-m3-on-primary shadow-xs"
-                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                              ? "text-m3-on-primary font-bold"
+                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/20"
                           }`}
                           title="Single column feed (Instagram style)"
                         >
-                          <Smartphone size={14} />
+                          {gridDensity === "single" && (
+                            <motion.div
+                              layoutId="active-density-bg"
+                              className="absolute inset-0 bg-m3-primary rounded-md shadow-xs -z-10"
+                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                          <Smartphone size={14} className="relative z-10" />
                         </button>
                         <button
                           onClick={() => setGridDensity("double")}
-                          className={`flex items-center justify-center w-8 h-7 rounded-md transition-all cursor-pointer ${
+                          className={`relative flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-300 cursor-pointer ${
                             gridDensity === "double"
-                              ? "bg-m3-primary text-m3-on-primary shadow-xs"
-                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                              ? "text-m3-on-primary font-bold"
+                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/20"
                           }`}
                           title="Two-column masonry grid"
                         >
-                          <LayoutGrid size={14} />
+                          {gridDensity === "double" && (
+                            <motion.div
+                              layoutId="active-density-bg"
+                              className="absolute inset-0 bg-m3-primary rounded-md shadow-xs -z-10"
+                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                          <LayoutGrid size={14} className="relative z-10" />
                         </button>
                         <button
                           onClick={() => setGridDensity("list")}
-                          className={`flex items-center justify-center w-8 h-7 rounded-md transition-all cursor-pointer ${
+                          className={`relative flex items-center justify-center w-8 h-7 rounded-md transition-colors duration-300 cursor-pointer ${
                             gridDensity === "list"
-                              ? "bg-m3-primary text-m3-on-primary shadow-xs"
-                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
+                              ? "text-m3-on-primary font-bold"
+                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/20"
                           }`}
                           title="Compact list layout"
                         >
-                          <List size={14} />
+                          {gridDensity === "list" && (
+                            <motion.div
+                              layoutId="active-density-bg"
+                              className="absolute inset-0 bg-m3-primary rounded-md shadow-xs -z-10"
+                              transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                          <List size={14} className="relative z-10" />
                         </button>
                       </div>
 
@@ -2613,14 +2574,6 @@ export const DashboardView = React.memo(
                   exit={{ opacity: 0, y: -15 }}
                   className="max-w-3xl mx-auto py-12 md:py-20 flex flex-col gap-8 items-center justify-center text-center"
                 >
-                  <motion.div
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ delay: 0.1, duration: 0.4 }}
-                  >
-                    <EmptyLibraryIllustration />
-                  </motion.div>
-
                   <div className="flex flex-col gap-3 max-w-xl">
                     <h1 className="text-3xl font-extrabold font-display text-m3-on-surface tracking-tight">
                       Welcome to Instasorter
@@ -2712,14 +2665,6 @@ export const DashboardView = React.memo(
                   exit={{ opacity: 0, y: -10 }}
                   className="h-full flex flex-col items-center justify-center gap-5 py-16 text-center max-w-md mx-auto px-4"
                 >
-                  <motion.div
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ delay: 0.1, duration: 0.4 }}
-                  >
-                    <EmptyFilterIllustration />
-                  </motion.div>
-                  
                   <div className="space-y-2">
                     <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-m3-surface-variant/50 border border-m3-outline-variant/20 text-[11px] font-mono font-bold text-m3-on-surface-variant">
                       <span>No matching posts found</span>
@@ -2749,47 +2694,15 @@ export const DashboardView = React.memo(
                 <>
                   {/* <DashboardAnalytics posts={posts} /> */}
 
-                  {activeBooleanSearch ? (
-                    <BooleanSearchIndicator
-                      query={deferredSearchQuery}
-                      tokens={activeBooleanSearch.tokens}
-                      ast={activeBooleanSearch.ast}
-                      resultsCount={filteredPosts.length}
-                      onClearSearch={() => {
-                        setLocalSearchQuery("");
-                        setSearchQuery("");
-                      }}
-                      onAppendOperator={(op) => {
-                        const newQ = localSearchQuery ? `${localSearchQuery}${op}` : op.trim();
-                        setLocalSearchQuery(newQ);
-                        setSearchQuery(newQ);
-                      }}
-                      onSetPresetQuery={(preset) => {
-                        setLocalSearchQuery(preset);
-                        setSearchQuery(preset);
-                        saveSearchQuery(preset);
-                      }}
-                    />
-                  ) : activeExpandedSearch ? (
-                    <SmartSearchIndicator
-                      expandedQuery={activeExpandedSearch}
-                      resultsCount={filteredPosts.length}
-                      onApplySynonymTerm={(term) => {
-                        setLocalSearchQuery(term);
-                        setSearchQuery(term);
-                        saveSearchQuery(term);
-                      }}
-                      onClearSearch={() => {
-                        setLocalSearchQuery("");
-                        setSearchQuery("");
-                      }}
-                    />
-                  ) : null}
+
 
                   {/* CONTENT VIEWS */}
                   <LayoutGroup id="dashboard-post-grid">
                     <motion.div
                       layout
+                      transition={{
+                        layout: { type: "spring", stiffness: 280, damping: 28 }
+                      }}
                       initial="hidden"
                       animate="visible"
                       variants={{
@@ -2799,12 +2712,17 @@ export const DashboardView = React.memo(
                     >
                       {gridDensity === "list" ? (
                         <Virtuoso
+                          key={`virtuoso-list-${gridDensity}`}
                           customScrollParent={scrollElement || undefined}
                           data={chunkArray(visiblePosts, 1)}
                           itemContent={(index, row) => {
                             if (gridDensity === "list") {
                               return (
-                                <div className="flex flex-col w-full max-w-4xl mx-auto bg-m3-surface border-x border-b border-m3-outline-variant/40 first:border-t first:rounded-t-xl last:rounded-b-xl shadow-sm">
+                                <motion.div
+                                  layout
+                                  transition={{ layout: { type: "spring", stiffness: 280, damping: 28 } }}
+                                  className="flex flex-col w-full max-w-4xl mx-auto bg-m3-surface border-x border-b border-m3-outline-variant/40 first:border-t first:rounded-t-xl last:rounded-b-xl shadow-sm"
+                                >
                                   {row.map((post) => {
                                     const fullPost = post;
                                     const isVideo =
@@ -2826,10 +2744,12 @@ export const DashboardView = React.memo(
                                     return (
                                       <motion.div
                                         key={`${filterKey}-${post.id}`}
+                                        layout
                                         id={`post-card-container-${post.id}`}
                                         initial={{ opacity: 0, y: 12 }}
                                         animate={{ opacity: 1, y: 0 }}
                                         transition={{
+                                          layout: { type: "spring", stiffness: 280, damping: 28 },
                                           type: "spring",
                                           stiffness: 260,
                                           damping: 24,
@@ -2838,7 +2758,8 @@ export const DashboardView = React.memo(
                                       >
                                         <motion.div
                                           layoutId={`post-card-${post.id}`}
-                                          onClick={() => setDetailPost(post)}
+                                          layout
+                                          onClick={() => handleOpenFullscreen(post)}
                                           onMouseEnter={() =>
                                             setKeyboardFocusedId(post.id)
                                           }
@@ -2850,9 +2771,8 @@ export const DashboardView = React.memo(
                                           }}
                                           whileTap={{ scale: 0.992 }}
                                           transition={{
-                                            type: "spring",
-                                            stiffness: 400,
-                                            damping: 22,
+                                            layout: { type: "spring", stiffness: 280, damping: 28 },
+                                            default: { type: "spring", stiffness: 400, damping: 22 }
                                           }}
                                           className={`group flex items-center gap-3 sm:gap-4 p-2 sm:p-3 transition-all duration-300 cursor-pointer relative hover:scale-[1.01] hover:shadow-md hover:z-10 hover:bg-m3-surface rounded-xl ${
                                             selectedPostIds.includes(post.id)
@@ -2860,22 +2780,31 @@ export const DashboardView = React.memo(
                                               : isKeyboardFocused
                                                 ? "bg-m3-primary-container/10"
                                                 : "bg-transparent"
-                                          }`}
-                                        >
-                                          {/* Checkbox for Select */}
-                                          <div
+                                          }`}>
+                                                                  {/* Checkbox for Select */}
+                                          <motion.div
                                             onClick={(e) => {
                                               e.stopPropagation();
                                               toggleSelect(post.id, e);
                                             }}
-                                            className={`absolute top-2 left-2 z-10 w-5 h-5 rounded-md border flex items-center justify-center transition-all ${
+                                            whileHover={{ scale: 1.15 }}
+                                            whileTap={{ scale: 0.9 }}
+                                            animate={selectedPostIds.includes(post.id) ? { scale: [0.95, 1.15, 1.05, 1] } : { scale: 1 }}
+                                            transition={{ type: "spring", stiffness: 420, damping: 16 }}
+                                            className={`absolute top-2 left-2 z-10 w-5 h-5 rounded-md border flex items-center justify-center cursor-pointer transition-all ${
                                               selectedPostIds.includes(post.id)
-                                                ? "bg-m3-primary border-m3-primary text-m3-on-primary scale-100"
-                                                : "bg-black/35 border-white/40 text-transparent opacity-0 group-hover:opacity-100 scale-95"
+                                                ? "bg-m3-primary border-m3-primary text-m3-on-primary"
+                                                : "bg-black/35 border-white/40 text-transparent opacity-0 group-hover:opacity-100"
                                             }`}
                                           >
-                                            <Check size={11} className="stroke-[3]" />
-                                          </div>
+                                            <motion.div
+                                              initial={{ scale: 0 }}
+                                              animate={selectedPostIds.includes(post.id) ? { scale: 1 } : { scale: 0 }}
+                                              transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                                            >
+                                              <Check size={11} className="stroke-[3]" />
+                                            </motion.div>
+                                          </motion.div>
                                           {/* Thumbnail */}
                                           <div className="w-10 h-10 rounded-md overflow-hidden shrink-0 bg-m3-surface-low border border-m3-outline-variant/10 relative">
                                             <InstagramImage
@@ -2971,7 +2900,7 @@ export const DashboardView = React.memo(
                                       </motion.div>
                                     );
                                   })}
-                                </div>
+                                </motion.div>
                               );
                             }
                             
@@ -2980,10 +2909,13 @@ export const DashboardView = React.memo(
                         />
                       ) : (
                         <Virtuoso
+                          key={`virtuoso-grid-${gridDensity}-${masonryColumns}`}
                           customScrollParent={scrollElement || undefined}
                           data={chunkArray(visiblePosts, masonryColumns)}
                           itemContent={(rowIndex, rowPosts) => (
-                            <div
+                            <motion.div
+                              layout
+                              transition={{ layout: { type: "spring", stiffness: 280, damping: 28 } }}
                               key={`grid-row-${rowIndex}`}
                               className="grid gap-4 w-full mb-4 px-1"
                               style={{
@@ -3003,6 +2935,7 @@ export const DashboardView = React.memo(
                                     initial={{ opacity: 0, y: 12 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{
+                                      layout: { type: "spring", stiffness: 280, damping: 28 },
                                       type: "spring",
                                       stiffness: 260,
                                       damping: 24,
@@ -3016,7 +2949,7 @@ export const DashboardView = React.memo(
                                       onTagClick={toggleTagFilter}
                                       onCreatorClick={setCreatorFilter}
                                       onPeek={setPeekPost}
-                                      onClick={() => setDetailPost(post)}
+                                      onClick={() => handleOpenFullscreen(post)}
                                       creatorFilter={creatorFilter}
                                       isImmersive={isImmersive}
                                       isKeyboardFocused={isKeyboardFocused}
@@ -3027,7 +2960,7 @@ export const DashboardView = React.memo(
                                   </motion.div>
                                 );
                               })}
-                            </div>
+                            </motion.div>
                           )}
                         />
                       )}
@@ -3196,42 +3129,17 @@ export const DashboardView = React.memo(
           )}
         </AnimatePresence>
 
-        {/* Full Page Post Detail Modal */}
+        {/* Immersive Fullscreen Media Viewer */}
         <AnimatePresence>
-          {detailPost && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 md:p-8 overflow-y-auto"
-              onClick={() => setDetailPost(null)}
-            >
-              <div
-                className="relative w-full max-w-[600px] my-auto"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {/* Floating close button */}
-                <button
-                  type="button"
-                  onClick={() => setDetailPost(null)}
-                  className="absolute -top-10 right-0 w-10 sm:w-8 h-10 sm:h-8 rounded-full bg-white/20 hover:bg-white/40 text-white flex items-center justify-center z-50 cursor-pointer transition-all"
-                  title="Close Preview"
-                >
-                  <X size={16} />
-                </button>
-
-                <MemoizedPostCard
-                  post={detailPost}
-                  isSelected={false}
-                  onToggleSelect={() => {}}
-                  onTagClick={toggleTagFilter}
-                  onCreatorClick={setCreatorFilter}
-                  isDetailMode={true}
-                  creatorFilter={creatorFilter}
-                  onClose={() => setDetailPost(null)}
-                />
-              </div>
-            </motion.div>
+          {fullscreenIndex !== null && (
+            <FullScreenMediaViewer
+              posts={filteredPosts}
+              initialIndex={fullscreenIndex}
+              onClose={() => setFullscreenIndex(null)}
+              onSelectIndex={(idx) => setFullscreenIndex(idx)}
+              onTagClick={toggleTagFilter}
+              onCreatorClick={setCreatorFilter}
+            />
           )}
         </AnimatePresence>
 

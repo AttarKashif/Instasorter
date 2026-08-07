@@ -28,12 +28,19 @@ import {
   HardDrive,
   Camera,
   X,
+  Terminal,
+  Cpu,
+  Download,
+  Search,
+  Clock,
+  AlertTriangle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import toast from "react-hot-toast";
 import { usePostStore } from "../../store/useStore";
 import { db } from "../../lib/db";
 import { triggerVibration } from "../../lib/vibrate";
+import { appLogger, LogEntry, LogCategory } from "../../lib/appLogger";
 import {
   retrySingleThumbnail,
   isWorkerActive,
@@ -42,6 +49,7 @@ import {
   getThumbnailStats,
   getThrottleStatus,
   retryFailedThumbnails,
+  refreshLibraryTargeted,
 } from "../../lib/thumbnailWorker";
 import { VOCABULARY } from "../../constants/vocabulary";
 
@@ -62,6 +70,10 @@ export const SettingsView = React.memo(
     const t = VOCABULARY.settings;
     const posts = usePostStore((state) => state.posts);
     const setPosts = usePostStore((state) => state.setPosts);
+    const isBackgroundOrganizerEnabled = usePostStore((state) => state.isBackgroundOrganizerEnabled);
+    const setIsBackgroundOrganizerEnabled = usePostStore((state) => state.setIsBackgroundOrganizerEnabled);
+    const backgroundOrganizerStatus = usePostStore((state) => state.backgroundOrganizerStatus);
+    const backgroundOrganizerProgress = usePostStore((state) => state.backgroundOrganizerProgress);
 
     const [workerStats, setWorkerStats] = useState(() =>
       getThumbnailStats(posts),
@@ -103,8 +115,194 @@ export const SettingsView = React.memo(
       };
     }, [isDownloading]);
 
+    const [scrapingUser, setScrapingUser] = useState("");
+    const [scrapingPass, setScrapingPass] = useState("");
+    const [scrapingSession, setScrapingSession] = useState("");
+    const [scrapingProxy, setScrapingProxy] = useState("");
+    const [loadingConfig, setLoadingConfig] = useState(false);
+    const [savingConfig, setSavingConfig] = useState(false);
+
+    const [logs, setLogs] = useState<LogEntry[]>(() => appLogger.getLogs());
+    const [isLoggingActive, setIsLoggingActive] = useState(() => appLogger.isEnabled());
+    const [logFilterCategory, setLogFilterCategory] = useState<string>("all");
+    const [logSearchText, setLogSearchText] = useState("");
+    const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+
+    useEffect(() => {
+      const unsubscribe = appLogger.subscribe((updatedLogs) => {
+        setLogs(updatedLogs);
+      });
+      return () => unsubscribe();
+    }, []);
+
+    const logStats = useMemo(() => appLogger.getStats(), [logs]);
+
+    const filteredLogs = useMemo(() => {
+      return logs.filter((log) => {
+        if (logFilterCategory !== "all" && log.category !== logFilterCategory) {
+          return false;
+        }
+        if (logSearchText.trim()) {
+          const query = logSearchText.toLowerCase();
+          const matchTitle = log.title.toLowerCase().includes(query);
+          const matchMsg = log.message.toLowerCase().includes(query);
+          const matchStack = log.stack?.toLowerCase().includes(query) || false;
+          return matchTitle || matchMsg || matchStack;
+        }
+        return true;
+      });
+    }, [logs, logFilterCategory, logSearchText]);
+
+    const handleToggleLogging = (val: boolean) => {
+      appLogger.setEnabled(val);
+      setIsLoggingActive(val);
+      toast.success(val ? "Developer logging enabled" : "Developer logging disabled");
+    };
+
+    const handleClearLogs = () => {
+      appLogger.clearLogs();
+      toast.success("Diagnostic logs cleared");
+    };
+
+    const handleExportLogs = () => {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
+      const downloadAnchor = document.createElement("a");
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `instasorter_logs_${Date.now()}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+      toast.success("Logs exported successfully");
+    };
+
+    useEffect(() => {
+      const fetchScrapingConfig = async () => {
+        setLoadingConfig(true);
+        try {
+          const res = await fetch("/api/scraping-config");
+          if (res.ok) {
+            const data = await res.json();
+            setScrapingUser(data.username || "");
+            setScrapingProxy(data.proxy || "");
+            if (data.hasSessionCookie) {
+              setScrapingSession("●●●●●●●●●●●●");
+            }
+          }
+        } catch (e) {
+          console.error("Failed to load scraping config", e);
+        } finally {
+          setLoadingConfig(false);
+        }
+      };
+      fetchScrapingConfig();
+    }, []);
+
+    const handleSaveScrapingConfig = async () => {
+      setSavingConfig(true);
+      try {
+        const payload: any = {
+          username: scrapingUser,
+          proxy: scrapingProxy,
+        };
+        if (scrapingPass !== "") {
+          payload.password = scrapingPass;
+        }
+        if (scrapingSession !== "●●●●●●●●●●●●") {
+          payload.session_cookie = scrapingSession;
+        }
+        
+        const res = await fetch("/api/save-scraping-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          toast.success("Scraper credentials and proxy updated successfully!");
+          setScrapingPass("");
+        } else {
+          const errData = await res.json();
+          toast.error(`Failed to save config: ${errData.error || "Unknown error"}`);
+        }
+      } catch (err: any) {
+        toast.error(`Error saving scraper config: ${err.message}`);
+      } finally {
+        setSavingConfig(false);
+      }
+    };
+
     const [showConfirmClear, setShowConfirmClear] = useState(false);
     const [showConfirmClearAll, setShowConfirmClearAll] = useState(false);
+    const [testingInstaloader, setTestingInstaloader] = useState(false);
+    const [instaloaderResult, setInstaloaderResult] = useState<any>(null);
+    const [testingMediaScraper, setTestingMediaScraper] = useState(false);
+    const [mediaScraperResult, setMediaScraperResult] = useState<any>(null);
+
+    const handleTestInstaloader = async () => {
+      setTestingInstaloader(true);
+      setInstaloaderResult(null);
+      try {
+        const sampleTarget = posts[0]?.id || "C_abc123";
+        const res = await fetch("/api/instaloader-extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shortcode: sampleTarget }),
+        });
+        const data = await res.json();
+        setInstaloaderResult(data);
+        if (data.success) {
+          toast.success(`Instaloader extracted @${data.ownerUsername || 'user'} post metadata!`);
+        } else {
+          toast.error(`Instaloader status: ${data.error || 'Failed to extract'}`);
+        }
+      } catch (err: any) {
+        toast.error(`Error connecting to Instaloader bridge: ${err.message}`);
+      } finally {
+        setTestingInstaloader(false);
+      }
+    };
+
+    const handleTestMediaScraper = async () => {
+      setTestingMediaScraper(true);
+      setMediaScraperResult(null);
+      try {
+        const sampleTarget = posts[0]?.id || "C_abc123";
+        const res = await fetch("/api/media-scraper-extract", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shortcode: sampleTarget }),
+        });
+        const data = await res.json();
+        setMediaScraperResult(data);
+        if (data.success) {
+          toast.success(`Media Scraper extracted @${data.ownerUsername || 'user'} post media!`);
+        } else {
+          toast.error(`Media Scraper status: ${data.error || 'Bypassed to backup mirror'}`);
+        }
+      } catch (err: any) {
+        toast.error(`Error connecting to Media Scraper engine: ${err.message}`);
+      } finally {
+        setTestingMediaScraper(false);
+      }
+    };
+
+    const [isRefreshingLibrary, setIsRefreshingLibrary] = useState(false);
+
+    const handleRefreshLibrary = async () => {
+      setIsRefreshingLibrary(true);
+      try {
+        const res = await refreshLibraryTargeted();
+        if (res.count > 0) {
+          toast.success(`Refresh Library: Queued ${res.count} post${res.count > 1 ? 's' : ''} lacking thumbnails or failed processing for low-intensity re-indexing.`);
+        } else {
+          toast.success("Library healthy: All saved posts already have active thumbnails!");
+        }
+      } catch (err: any) {
+        toast.error(`Refresh Library failed: ${err.message}`);
+      } finally {
+        setIsRefreshingLibrary(false);
+      }
+    };
+
     const setToast = useCallback((val: { type: "success" | "error"; message: string } | null) => {
       if (val) {
         if (val.type === "success") {
@@ -661,43 +859,292 @@ export const SettingsView = React.memo(
                 </div>
               </div>
 
+              {/* Background Auto-Organizer Worker Toggle Card */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3.5 min-w-0">
+                    <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary shrink-0 mt-0.5">
+                      <Cpu size={20} />
+                    </div>
+                    <div className="min-w-0">
+                      <h4 className="text-xs font-bold text-m3-on-surface">Background Auto-Organizer Worker</h4>
+                      <p className="text-[11px] text-m3-on-surface-variant mt-1 leading-relaxed">
+                        Periodically scans, deduplicates, and organizes newly imported posts. Toggle off to save power and reduce CPU overhead when on battery.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
+                    <div className="text-right">
+                      <span className="text-[10px] font-mono text-m3-outline uppercase block font-bold">Status</span>
+                      <div className="flex items-center gap-1.5 mt-0.5 justify-end">
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          !isBackgroundOrganizerEnabled 
+                            ? "bg-gray-400" 
+                            : backgroundOrganizerStatus === "running" 
+                            ? "bg-emerald-500 animate-pulse" 
+                            : backgroundOrganizerStatus === "completed"
+                            ? "bg-blue-500"
+                            : "bg-emerald-400"
+                        }`} />
+                        <span className="text-[10px] font-semibold text-m3-on-surface-variant capitalize">
+                          {!isBackgroundOrganizerEnabled 
+                            ? "Disabled" 
+                            : backgroundOrganizerStatus === "running" 
+                            ? "Active..." 
+                            : backgroundOrganizerStatus === "completed"
+                            ? "Completed"
+                            : "Idle"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        setIsBackgroundOrganizerEnabled(!isBackgroundOrganizerEnabled);
+                        toast.success(
+                          !isBackgroundOrganizerEnabled 
+                            ? "Background auto-organizer enabled." 
+                            : "Background auto-organizer disabled to save power."
+                        );
+                      }}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        isBackgroundOrganizerEnabled ? "bg-m3-primary" : "bg-m3-outline-variant"
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-m3-surface shadow-xs ring-0 transition duration-200 ease-in-out ${
+                          isBackgroundOrganizerEnabled ? "translate-x-5" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                {isBackgroundOrganizerEnabled && backgroundOrganizerStatus === "running" && (
+                  <div className="space-y-1.5 pt-2 border-t border-m3-outline-variant/10">
+                    <div className="flex justify-between text-[9px] font-mono text-m3-outline">
+                      <span>Scanning & grouping posts...</span>
+                      <span>{backgroundOrganizerProgress}%</span>
+                    </div>
+                    <div className="w-full bg-m3-surface-container rounded-full h-1 overflow-hidden">
+                      <div
+                        className="bg-emerald-500 h-full rounded-full transition-all duration-300"
+                        style={{ width: `${backgroundOrganizerProgress}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Cache & Thumbnail Optimization Card */}
               <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <h4 className="text-xs font-bold text-m3-on-surface">Thumbnail &amp; Cache Maintenance</h4>
                     <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-                      {workerStats.failed > 0
-                        ? `${workerStats.failed} thumbnails failed to load. Retry downloading them now.`
-                        : "All cached media thumbnails are active and synchronized."}
+                      Targeted low-intensity re-indexing for posts lacking thumbnails or with failed processing status.
                     </p>
                   </div>
-                  {workerStats.failed > 0 && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    {workerStats.failed > 0 && (
+                      <button
+                        onClick={() => retryFailedThumbnails()}
+                        className="flex items-center gap-1.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer hover:bg-amber-500/20 transition-all shadow-2xs active:scale-95"
+                      >
+                        <RefreshCw size={12} />
+                        <span>Retry Failed ({workerStats.failed})</span>
+                      </button>
+                    )}
                     <button
-                      onClick={() => retryFailedThumbnails()}
-                      className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer hover:bg-m3-primary/90 transition-all shadow-xs active:scale-95"
+                      onClick={handleRefreshLibrary}
+                      disabled={isRefreshingLibrary}
+                      className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer hover:bg-m3-primary/90 transition-all shadow-xs active:scale-95 disabled:opacity-50"
                     >
-                      <RefreshCw size={12} />
-                      <span>Retry Failed ({workerStats.failed})</span>
+                      <RefreshCw size={13} className={isRefreshingLibrary ? "animate-spin" : ""} />
+                      <span>{isRefreshingLibrary ? "Re-indexing..." : "Refresh Library"}</span>
                     </button>
-                  )}
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-m3-outline-variant/10">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-m3-outline-variant/10">
+                  <button
+                    onClick={handleRefreshLibrary}
+                    disabled={isRefreshingLibrary}
+                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95 disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} className={`text-m3-primary ${isRefreshingLibrary ? "animate-spin" : ""}`} />
+                    <span>Refresh Library</span>
+                  </button>
                   <button
                     onClick={handleAnalyzeDuplicates}
                     className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
                   >
-                    <RefreshCw size={14} className="text-m3-primary" />
-                    <span>Scan &amp; Merge Duplicates</span>
+                    <Layers size={14} className="text-m3-primary" />
+                    <span>Scan Duplicates</span>
                   </button>
                   <button
                     onClick={handleConsolidateTags}
                     className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
                   >
                     <Hash size={14} className="text-m3-primary" />
-                    <span>Normalize &amp; Consolidate Tags</span>
+                    <span>Normalize Tags</span>
                   </button>
+                </div>
+              </div>
+
+              {/* Instagram Scraper Credentials & Proxy Configuration */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
+                <div className="flex items-center gap-2 pb-2 border-b border-m3-outline-variant/10">
+                  <Sliders size={16} className="text-m3-primary" />
+                  <h4 className="text-xs font-bold text-m3-on-surface">Instagram Scraper Configuration &amp; Proxy</h4>
+                </div>
+                
+                <p className="text-[11px] text-m3-on-surface-variant">
+                  Configure account credentials, session cookies, and proxies to bypass Instagram's strict rate limits and extraction blocks completely. This configures both the Instaloader Python Bridge and Direct GraphQL Scraping engines.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
+                      Instagram Username
+                    </label>
+                    <input
+                      type="text"
+                      value={scrapingUser}
+                      onChange={(e) => setScrapingUser(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
+                      placeholder="e.g. instasorter_curator"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
+                      Instagram Password
+                    </label>
+                    <input
+                      type="password"
+                      value={scrapingPass}
+                      onChange={(e) => setScrapingPass(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
+                      placeholder="Leave empty to preserve saved password"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
+                      Active Session Cookie (sessionid)
+                    </label>
+                    <textarea
+                      value={scrapingSession}
+                      onChange={(e) => setScrapingSession(e.target.value)}
+                      rows={2}
+                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-mono text-m3-on-surface resize-none"
+                      placeholder="Paste your Instagram sessionid cookie value here for highly stable scrapers"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
+                      HTTP/SOCKS5 Proxy (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={scrapingProxy}
+                      onChange={(e) => setScrapingProxy(e.target.value)}
+                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
+                      placeholder="e.g. http://username:password@ip:port or socks5://ip:port"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={handleSaveScrapingConfig}
+                    disabled={savingConfig}
+                    className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl px-5 py-2.5 text-xs font-bold cursor-pointer hover:bg-m3-primary/95 transition-all shadow-xs active:scale-95 disabled:opacity-50"
+                  >
+                    {savingConfig ? (
+                      <>
+                        <RefreshCw size={12} className="animate-spin" />
+                        <span>Saving configuration...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save size={12} />
+                        <span>Save Scraper Configuration</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Scraper Pipeline Diagnostic Console */}
+              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
+                <div className="flex items-center gap-2 pb-2 border-b border-m3-outline-variant/10">
+                  <Terminal size={16} className="text-m3-primary" />
+                  <h4 className="text-xs font-bold text-m3-on-surface">Interactive Diagnostics Console</h4>
+                </div>
+
+                <p className="text-[11px] text-m3-on-surface-variant">
+                  Test the active bridged engines with a live query using your newly configured credentials and proxies. This prints real-time debug responses.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Instaloader Section */}
+                  <div className="p-4 rounded-xl bg-m3-surface border border-m3-outline-variant/30 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider">Engine A</span>
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[9px] font-mono font-bold">
+                        Instaloader Bridge
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleTestInstaloader}
+                      disabled={testingInstaloader}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 border border-m3-outline-variant/60 hover:border-m3-primary hover:text-m3-primary bg-m3-surface rounded-xl text-xs font-bold cursor-pointer transition-all shadow-2xs active:scale-95 disabled:opacity-50"
+                    >
+                      <Terminal size={12} className="text-m3-primary" />
+                      <span>{testingInstaloader ? "Running Bridge..." : "Run Test Probe"}</span>
+                    </button>
+
+                    {instaloaderResult && (
+                      <div className="p-3 rounded-lg bg-m3-surface-low border border-m3-outline-variant/20 font-mono text-[10px] space-y-1.5 max-h-48 overflow-y-auto">
+                        <div className="font-bold text-m3-on-surface">
+                          Result: {instaloaderResult.success ? "✅ Success" : "ℹ️ Fallback Enabled"}
+                        </div>
+                        <pre className="text-[9px] text-m3-on-surface-variant whitespace-pre-wrap">
+                          {JSON.stringify(instaloaderResult, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ahmedrangel/instagram-media-scraper Section */}
+                  <div className="p-4 rounded-xl bg-m3-surface border border-m3-outline-variant/30 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider">Engine B</span>
+                      <span className="px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 text-[9px] font-mono font-bold">
+                        Direct GQL/API Scraper
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleTestMediaScraper}
+                      disabled={testingMediaScraper}
+                      className="w-full flex items-center justify-center gap-1.5 py-2.5 border border-m3-outline-variant/60 hover:border-m3-primary hover:text-m3-primary bg-m3-surface rounded-xl text-xs font-bold cursor-pointer transition-all shadow-2xs active:scale-95 disabled:opacity-50"
+                    >
+                      <Terminal size={12} className="text-m3-primary" />
+                      <span>{testingMediaScraper ? "Running Direct GQL..." : "Run Test Probe"}</span>
+                    </button>
+
+                    {mediaScraperResult && (
+                      <div className="p-3 rounded-lg bg-m3-surface-low border border-m3-outline-variant/20 font-mono text-[10px] space-y-1.5 max-h-48 overflow-y-auto">
+                        <div className="font-bold text-m3-on-surface">
+                          Result: {mediaScraperResult.success ? "✅ Success" : "ℹ️ Fallback Enabled"}
+                        </div>
+                        <pre className="text-[9px] text-m3-on-surface-variant whitespace-pre-wrap">
+                          {JSON.stringify(mediaScraperResult, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -853,6 +1300,196 @@ export const SettingsView = React.memo(
               </div>
             </div>
           </section>
+
+          {/* ================= SECTION: DEVELOPER DIAGNOSTICS & OBSERVABILITY ================= */}
+          <section className="space-y-4 pt-6 border-t border-m3-outline-variant/30">
+            <div className="flex items-center justify-between pb-2 border-b border-m3-outline-variant/30">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
+                  <Terminal size={18} />
+                </div>
+                <div>
+                  <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
+                    Developer Diagnostics &amp; Observability
+                  </h2>
+                  <p className="text-[11px] text-m3-on-surface-variant">
+                    Real-time error tracking, background task monitoring, and storage operation telemetry.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleExportLogs}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-m3-outline-variant text-m3-on-surface hover:bg-m3-surface-container flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download size={13} />
+                  <span>Export JSON</span>
+                </button>
+                <button
+                  onClick={handleClearLogs}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-red-500/10 text-red-600 hover:bg-red-500/20 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 size={13} />
+                  <span>Clear Logs</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Logger Status Bar & Stats */}
+            <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 space-y-4 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h4 className="text-xs font-bold text-m3-on-surface">Background Observability Engine</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+                    Actively monitors unhandled exceptions, unhandled promise rejections, main thread freezes, and slow storage operations.
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleToggleLogging(!isLoggingActive)}
+                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer shrink-0 ${
+                    isLoggingActive ? "bg-m3-primary" : "bg-m3-outline-variant"
+                  }`}
+                >
+                  <motion.div
+                    className="bg-white w-4 h-4 rounded-full shadow-md"
+                    animate={{ x: isLoggingActive ? 24 : 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  />
+                </button>
+              </div>
+
+              {/* Stat Counters Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 pt-2">
+                <div className="bg-m3-surface p-3 rounded-xl border border-m3-outline-variant/20 text-center">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-on-surface-variant">Total</span>
+                  <p className="text-base font-bold font-mono text-m3-on-surface mt-0.5">{logStats.total}</p>
+                </div>
+                <div className="bg-red-500/5 p-3 rounded-xl border border-red-500/20 text-center">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-red-600">Crashes</span>
+                  <p className="text-base font-bold font-mono text-red-600 mt-0.5">{logStats.crashes}</p>
+                </div>
+                <div className="bg-amber-500/5 p-3 rounded-xl border border-amber-500/20 text-center">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-amber-600">Freezes</span>
+                  <p className="text-base font-bold font-mono text-amber-600 mt-0.5">{logStats.freezes}</p>
+                </div>
+                <div className="bg-blue-500/5 p-3 rounded-xl border border-blue-500/20 text-center">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-blue-600">Slow Tasks</span>
+                  <p className="text-base font-bold font-mono text-blue-600 mt-0.5">{logStats.slowPerf}</p>
+                </div>
+                <div className="bg-purple-500/5 p-3 rounded-xl border border-purple-500/20 text-center">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-purple-600">Errors</span>
+                  <p className="text-base font-bold font-mono text-purple-600 mt-0.5">{logStats.errors}</p>
+                </div>
+                <div className="bg-emerald-500/5 p-3 rounded-xl border border-emerald-500/20 text-center">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-600">Warnings</span>
+                  <p className="text-base font-bold font-mono text-emerald-600 mt-0.5">{logStats.warnings}</p>
+                </div>
+              </div>
+
+              {/* Filters & Search */}
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <div className="relative flex-1">
+                  <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-m3-on-surface-variant" />
+                  <input
+                    type="text"
+                    placeholder="Search logs by title, message, stack..."
+                    value={logSearchText}
+                    onChange={(e) => setLogSearchText(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 bg-m3-surface rounded-xl border border-m3-outline-variant/30 text-xs text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                  {["all", "crash", "freeze", "slow_perf", "error", "warning", "info"].map((cat) => (
+                    <button
+                      key={cat}
+                      onClick={() => setLogFilterCategory(cat)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider shrink-0 cursor-pointer transition-colors ${
+                        logFilterCategory === cat
+                          ? "bg-m3-primary text-m3-on-primary"
+                          : "bg-m3-surface text-m3-on-surface-variant hover:text-m3-on-surface border border-m3-outline-variant/30"
+                      }`}
+                    >
+                      {cat.replace("_", " ")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Logs Stream List */}
+              <div className="bg-m3-surface rounded-xl border border-m3-outline-variant/25 max-h-[400px] overflow-y-auto divide-y divide-m3-outline-variant/10 font-mono text-xs">
+                {filteredLogs.length === 0 ? (
+                  <div className="p-8 text-center text-m3-on-surface-variant font-sans text-xs">
+                    No log entries found matching criteria. System is running smoothly.
+                  </div>
+                ) : (
+                  filteredLogs.map((log) => {
+                    const isExpanded = expandedLogId === log.id;
+                    const dateStr = new Date(log.timestamp).toLocaleTimeString();
+                    let badgeColor = "bg-slate-500/10 text-slate-600 border-slate-500/20";
+                    if (log.category === "crash") badgeColor = "bg-red-500/10 text-red-600 border-red-500/20";
+                    else if (log.category === "freeze") badgeColor = "bg-amber-500/10 text-amber-600 border-amber-500/20";
+                    else if (log.category === "slow_perf") badgeColor = "bg-blue-500/10 text-blue-600 border-blue-500/20";
+                    else if (log.category === "error") badgeColor = "bg-purple-500/10 text-purple-600 border-purple-500/20";
+                    else if (log.category === "warning") badgeColor = "bg-orange-500/10 text-orange-600 border-orange-500/20";
+
+                    return (
+                      <div
+                        key={log.id}
+                        onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                        className="p-3.5 hover:bg-m3-surface-container/50 transition-colors cursor-pointer space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${badgeColor}`}>
+                              {log.category.replace("_", " ")}
+                            </span>
+                            <span className="font-bold text-m3-on-surface font-sans">{log.title}</span>
+                          </div>
+                          <div className="flex items-center gap-2 text-m3-on-surface-variant text-[11px]">
+                            {log.durationMs && (
+                              <span className="text-blue-600 font-bold">{log.durationMs}ms</span>
+                            )}
+                            <span className="flex items-center gap-1">
+                              <Clock size={11} />
+                              {dateStr}
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-m3-on-surface-variant text-[11px] font-sans line-clamp-2">{log.message}</p>
+                        {isExpanded && (
+                          <div className="mt-2 pt-2 border-t border-m3-outline-variant/20 space-y-2 text-[11px]">
+                            {log.url && (
+                              <div>
+                                <span className="text-m3-outline">Path:</span> <span className="text-m3-on-surface">{log.url}</span>
+                              </div>
+                            )}
+                            {log.details && (
+                              <div>
+                                <span className="text-m3-outline">Details:</span>
+                                <pre className="mt-1 p-2 bg-m3-surface-container rounded-lg overflow-x-auto text-[10px] text-m3-on-surface">
+                                  {JSON.stringify(log.details, null, 2)}
+                                </pre>
+                              </div>
+                            )}
+                            {log.stack && (
+                              <div>
+                                <span className="text-m3-outline">Stack Trace:</span>
+                                <pre className="mt-1 p-2 bg-red-500/5 rounded-lg overflow-x-auto text-[10px] text-red-600">
+                                  {log.stack}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </section>
+
+
 
         </div>
 

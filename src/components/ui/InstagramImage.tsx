@@ -39,8 +39,7 @@ const getInitialImgSrc = (post: Post): string => {
     return post.thumbnailUrl;
   }
 
-  // Fallback to gorgeous dynamic Unsplash photo matching caption and tags
-  return getDynamicCoverByKeywords(post.caption || "", post.tags || post.hashtags || [], post.id);
+  return "";
 };
 
 const getDeterministicPalette = (id: string): string[] => {
@@ -208,38 +207,7 @@ export const InstagramImage = ({
 
   const isDataUri = post.thumbnailUrl && post.thumbnailUrl.startsWith("data:");
 
-  // If thumbnail scrape or image loading failed, show an error state UI block
-  if (hasFailed && !isDataUri) {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center bg-m3-surface-container/95 text-m3-on-surface-variant p-4 text-center select-none gap-2 border border-m3-outline-variant/30">
-        <div className="w-10 h-10 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center border border-red-500/25 shadow-xs">
-          <AlertTriangle size={20} className="stroke-[2.2]" />
-        </div>
-        <div className="flex flex-col gap-0.5 max-w-[180px]">
-          <span className="text-xs font-bold font-display text-m3-on-surface leading-tight">
-            Preview Unavailable
-          </span>
-          <span className="text-[10px] text-m3-outline font-mono">
-            Scrape error or private post
-          </span>
-        </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            setHasFailed(false);
-            setIsLoaded(false);
-            triggerHeal(true);
-          }}
-          className="mt-1 px-3 py-1 rounded-full bg-m3-primary/10 hover:bg-m3-primary/20 text-m3-primary text-[10px] font-bold transition-all cursor-pointer border border-m3-primary/20 flex items-center gap-1 active:scale-95"
-        >
-          <RefreshCw size={10} />
-          <span>Retry Scrape</span>
-        </button>
-      </div>
-    );
-  }
-
+  // If thumbnail scrape or image loading failed, fall back to clean gradient background instead of error SVG
   const palette = post.colorPalette && post.colorPalette.length >= 2
     ? post.colorPalette
     : getDeterministicPalette(post.id);
@@ -258,21 +226,10 @@ export const InstagramImage = ({
       {/* Dynamic Blur-up Gradient Placeholder */}
       <div 
         className={`absolute inset-0 z-0 transition-opacity duration-700 ease-in-out ${
-          isLoaded ? "opacity-0 pointer-events-none" : "opacity-100"
+          isLoaded && imgSrc ? "opacity-0 pointer-events-none" : "opacity-100"
         }`}
         style={gradientStyle}
       />
-
-      {/* Center Decorative Loading Icon Overlay */}
-      <div 
-        className={`absolute inset-0 flex items-center justify-center z-10 transition-opacity duration-500 pointer-events-none ${
-          isLoaded ? "opacity-0" : "opacity-100 animate-pulse"
-        }`}
-      >
-        <div className="p-2.5 rounded-full bg-white/20 dark:bg-black/20 backdrop-blur-md border border-white/10 shadow-xs">
-          <ImageIcon size={20} className="text-white/80 dark:text-white/60 stroke-[1.5]" />
-        </div>
-      </div>
 
       {/* Actual image */}
       {isInView && (
