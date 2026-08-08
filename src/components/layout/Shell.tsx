@@ -23,6 +23,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
+  Folder,
+  Database,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { usePostStore } from "../../store/useStore";
@@ -34,6 +36,7 @@ import {
   unregisterProgressCallback,
   offloadPendingToBackgroundServer,
 } from "../../lib/thumbnailWorker";
+import { triggerVibration } from "../../lib/vibrate";
 
 type ViewType = "home" | "analytics" | "settings" | "grouped";
 
@@ -75,7 +78,87 @@ export const Shell = ({
   const smartCollections = usePostStore((state) => state.smartCollections);
   const activePreviewPost = usePostStore((state) => state.activePreviewPost);
   const setActivePreviewPost = usePostStore((state) => state.setActivePreviewPost);
+  const isImportModalOpen = usePostStore((state) => state.isImportModalOpen);
   const setIsImportModalOpen = usePostStore((state) => state.setIsImportModalOpen);
+  const searchQuery = usePostStore((state) => state.searchQuery);
+  const setSearchQuery = usePostStore((state) => state.setSearchQuery);
+
+  const [selectedGroupInShell, setSelectedGroupInShell] = useState<{
+    type: "collection" | "creator" | "creators_folder" | "tag";
+    name: string;
+  } | null>(() => {
+    try {
+      const saved = localStorage.getItem("grouped_selected_group");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    const updateGroup = () => {
+      try {
+        const saved = localStorage.getItem("grouped_selected_group");
+        setSelectedGroupInShell(saved ? JSON.parse(saved) : null);
+      } catch {
+        setSelectedGroupInShell(null);
+      }
+    };
+
+    window.addEventListener("grouped_selected_group_changed", updateGroup);
+    window.addEventListener("storage", updateGroup);
+    return () => {
+      window.removeEventListener("grouped_selected_group_changed", updateGroup);
+      window.removeEventListener("storage", updateGroup);
+    };
+  }, []);
+
+  const canGoBack = Boolean(
+    activePreviewPost ||
+      searchQuery ||
+      isImportModalOpen ||
+      (currentView === "grouped" && selectedGroupInShell) ||
+      currentView !== "home"
+  );
+
+  const handleGoBack = () => {
+    triggerVibration("light");
+    if (activePreviewPost) {
+      setActivePreviewPost(null);
+      return;
+    }
+    if (searchQuery) {
+      setSearchQuery("");
+      return;
+    }
+    if (isImportModalOpen) {
+      setIsImportModalOpen(false);
+      return;
+    }
+    if (currentView === "grouped" && selectedGroupInShell) {
+      window.dispatchEvent(new CustomEvent("clear_grouped_selected_group"));
+      setSelectedGroupInShell(null);
+      return;
+    }
+    if (currentView !== "home") {
+      onNavigate("home");
+      return;
+    }
+  };
+
+  const handleNavClick = (view: ViewType) => {
+    if (view === "home") {
+      triggerVibration("tap");
+    } else if (view === "grouped") {
+      triggerVibration("medium");
+    } else if (view === "analytics") {
+      triggerVibration("thud");
+    } else if (view === "settings") {
+      triggerVibration("double");
+    }
+    onNavigate(view);
+  };
+
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
     if (typeof window !== "undefined") {
@@ -207,23 +290,24 @@ export const Shell = ({
       switch (e.key) {
         case "1":
           e.preventDefault();
-          onNavigate("home");
+          handleNavClick("home");
           break;
         case "2":
           e.preventDefault();
-          onNavigate("analytics");
+          handleNavClick("analytics");
           break;
         case "3":
           e.preventDefault();
-          onNavigate("grouped");
+          handleNavClick("grouped");
           break;
         case "4":
           e.preventDefault();
           setIsImportModalOpen(true);
+          triggerVibration("light");
           break;
         case "5":
           e.preventDefault();
-          onNavigate("settings");
+          handleNavClick("settings");
           break;
         default:
           break;
@@ -351,10 +435,10 @@ export const Shell = ({
               return (
                 <button
                   key={item.id}
-                  onClick={() => onNavigate(item.id)}
+                  onClick={() => handleNavClick(item.id)}
                   onMouseEnter={() => setHoveredNavId(item.id)}
                   onMouseLeave={() => setHoveredNavId(null)}
-                  className={`group relative flex items-center ${isSidebarCollapsed ? "justify-center" : "justify-start"} gap-4 p-3.5 rounded-full text-sm font-medium transition-all duration-200 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary w-full`}
+                  className={`group relative flex items-center ${isSidebarCollapsed ? "justify-center" : "justify-start"} gap-4 p-4 min-h-[48px] rounded-full text-sm font-medium transition-all duration-200 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary w-full`}
                   title={item.label}
                 >
                   {/* Sliding hover pill (KokonutUI Style) */}
@@ -493,6 +577,151 @@ export const Shell = ({
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* Responsive Breadcrumb Navigation Trail */}
+        <header className="bg-m3-surface/90 backdrop-blur-md border-b border-m3-outline-variant/30 px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3 text-xs font-sans select-none z-20 shrink-0 sticky top-0">
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+            {/* Fast Go Back Button */}
+            <AnimatePresence mode="wait">
+              {canGoBack && (
+                <motion.button
+                  key="go-back-btn"
+                  initial={{ opacity: 0, scale: 0.9, x: -4 }}
+                  animate={{ opacity: 1, scale: 1, x: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, x: -4 }}
+                  whileHover={{ scale: 1.05, x: -2 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleGoBack}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-m3-surface-container hover:bg-m3-surface-container-high text-m3-on-surface font-semibold text-xs border border-m3-outline-variant/40 transition-colors shadow-xs cursor-pointer shrink-0"
+                  title="Go back to previous level (Back)"
+                  aria-label="Go back to previous level"
+                >
+                  <ChevronLeft size={15} className="text-m3-primary shrink-0" />
+                  <span className="hidden sm:inline">Back</span>
+                </motion.button>
+              )}
+            </AnimatePresence>
+
+            {/* Breadcrumb Trail Nav */}
+            <nav aria-label="Breadcrumb navigation" className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+              {/* Root Level: Dashboard */}
+              <button
+                onClick={() => {
+                  setActivePreviewPost(null);
+                  setSearchQuery("");
+                  if (currentView === "grouped" && selectedGroupInShell) {
+                    window.dispatchEvent(new CustomEvent("clear_grouped_selected_group"));
+                    setSelectedGroupInShell(null);
+                  }
+                  onNavigate("home");
+                }}
+                className={`flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+                  currentView === "home" && !activePreviewPost && !searchQuery
+                    ? "font-bold font-display text-m3-on-surface"
+                    : "text-m3-on-surface-variant hover:text-m3-primary font-medium"
+                }`}
+                title="Navigate to Dashboard Home"
+              >
+                <LayoutGrid size={13} className="text-m3-primary shrink-0" />
+                <span>Dashboard</span>
+              </button>
+
+              {/* View Segment if not home */}
+              {currentView !== "home" && (
+                <>
+                  <ChevronRight size={12} className="text-m3-outline/60 shrink-0" />
+                  <button
+                    onClick={() => {
+                      setActivePreviewPost(null);
+                      setSearchQuery("");
+                      if (currentView === "grouped" && selectedGroupInShell) {
+                        window.dispatchEvent(new CustomEvent("clear_grouped_selected_group"));
+                        setSelectedGroupInShell(null);
+                      }
+                    }}
+                    className={`transition-colors shrink-0 ${
+                      (currentView === "grouped" && selectedGroupInShell) || activePreviewPost || searchQuery
+                        ? "text-m3-on-surface-variant hover:text-m3-primary cursor-pointer font-medium"
+                        : "font-bold font-display text-m3-on-surface cursor-default"
+                    }`}
+                  >
+                    {getScreenName(currentView)}
+                  </button>
+                </>
+              )}
+
+              {/* Grouped Folder/Collection Context */}
+              {currentView === "grouped" && selectedGroupInShell && (
+                <>
+                  <ChevronRight size={12} className="text-m3-outline/60 shrink-0" />
+                  <span className="font-bold font-display text-m3-primary flex items-center gap-1 truncate max-w-[140px] sm:max-w-[220px]">
+                    <Folder size={12} className="shrink-0 text-m3-primary" />
+                    <span className="truncate">{selectedGroupInShell.name}</span>
+                  </span>
+                </>
+              )}
+
+              {/* Active Search Context */}
+              {searchQuery && (
+                <>
+                  <ChevronRight size={12} className="text-m3-outline/60 shrink-0" />
+                  <span className="inline-flex items-center gap-1 font-semibold text-m3-primary bg-m3-primary/10 px-2 py-0.5 rounded-full border border-m3-primary/20 max-w-[150px] sm:max-w-[220px]">
+                    <Search size={11} className="shrink-0 text-m3-primary" />
+                    <span className="truncate">"{searchQuery}"</span>
+                    <button
+                      onClick={() => setSearchQuery("")}
+                      className="hover:bg-m3-primary/20 rounded-full p-0.5 transition-colors cursor-pointer ml-0.5"
+                      title="Clear search"
+                    >
+                      <X size={10} />
+                    </button>
+                  </span>
+                </>
+              )}
+
+              {/* Active Preview Context */}
+              {activePreviewPost && (
+                <>
+                  <ChevronRight size={12} className="text-m3-outline/60 shrink-0" />
+                  <span className="font-bold font-display text-m3-primary flex items-center gap-1 truncate max-w-[140px] sm:max-w-[200px]">
+                    <span className="truncate">
+                      {activePreviewPost.caption
+                        ? activePreviewPost.caption.slice(0, 22) + (activePreviewPost.caption.length > 22 ? "..." : "")
+                        : "Post Preview"}
+                    </span>
+                  </span>
+                </>
+              )}
+            </nav>
+          </div>
+
+          {/* Right Area: Items Count & Keyboard Guide */}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-m3-surface-low border border-m3-outline-variant/30 text-[11px] font-mono font-medium text-m3-on-surface-variant">
+              <Database size={11} className="text-m3-primary" />
+              <span>{posts.length} items</span>
+            </span>
+
+            {theme && onThemeToggle && (
+              <button
+                onClick={onThemeToggle}
+                className="p-1.5 rounded-full hover:bg-m3-surface-variant/40 text-m3-on-surface-variant cursor-pointer transition-colors"
+                title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+              >
+                {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
+              </button>
+            )}
+
+            <button
+              onClick={() => setIsShortcutsOpen(true)}
+              className="p-1.5 rounded-full hover:bg-m3-surface-variant/40 text-m3-on-surface-variant cursor-pointer transition-colors"
+              title="Keyboard Shortcuts Guide (?)"
+            >
+              <Keyboard size={15} />
+            </button>
+          </div>
+        </header>
+
         {children}
       </main>
 
@@ -504,10 +733,10 @@ export const Shell = ({
           return (
             <button
               key={item.id}
-              onClick={() => onNavigate(item.id)}
+              onClick={() => handleNavClick(item.id)}
               onMouseEnter={() => setHoveredMobileNavId(item.id)}
               onMouseLeave={() => setHoveredMobileNavId(null)}
-              className="flex flex-col items-center justify-center w-[72px] h-[52px] relative cursor-pointer group focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary z-0"
+              className="flex flex-col items-center justify-center w-[72px] h-[56px] relative cursor-pointer group focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary z-0"
             >
               {/* Sliding hover backdrop (KokonutUI Style) */}
               {hoveredMobileNavId === item.id && !isActive && (

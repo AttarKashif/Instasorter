@@ -119,6 +119,9 @@ export const PostCard = React.memo(
     // Comment editing states
     const [commentInput, setCommentInput] = useState("");
 
+    // Success animation state
+    const [successAnimationType, setSuccessAnimationType] = useState<"archive" | "collection" | null>(null);
+
     // Google Search Grounding & Verification States
     const [isResearching, setIsResearching] = useState(false);
     const [researchResult, setResearchResult] = useState<string | null>(null);
@@ -347,6 +350,15 @@ export const PostCard = React.memo(
       const nextArchived = !post.isArchived;
       updatePost(post.id, { isArchived: nextArchived });
       await db.posts.update(post.id, { isArchived: nextArchived });
+
+      if (nextArchived) {
+        setSuccessAnimationType("archive");
+        triggerVibration("success");
+        setTimeout(() => setSuccessAnimationType(null), 1200);
+      } else {
+        triggerVibration("light");
+      }
+
       toast.success(nextArchived ? t.archivedAdded : t.archivedRemoved, {
         icon: nextArchived ? "📥" : "📤",
         duration: 1500,
@@ -424,6 +436,11 @@ export const PostCard = React.memo(
       const nextCols = [...currentCols, clean];
       updatePost(post.id, { collections: nextCols });
       await db.posts.update(post.id, { collections: nextCols });
+
+      setSuccessAnimationType("collection");
+      triggerVibration("success");
+      setTimeout(() => setSuccessAnimationType(null), 1200);
+
       setNewColInput("");
       setShowColDropdown(false);
       toast.success(t.collectionAdded.replace("{collection}", clean), {
@@ -635,10 +652,10 @@ export const PostCard = React.memo(
                             prev > 0 ? prev - 1 : slides.length - 1,
                           );
                         }}
-                        className="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/45 hover:bg-black/70 text-white flex items-center justify-center opacity-70 sm:opacity-0 sm:group-hover/carousel:opacity-100 hover:scale-105 active:scale-95 transition-all duration-200 z-30 shadow-md cursor-pointer"
+                        className="absolute left-2.5 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-black/45 hover:bg-black/70 text-white flex items-center justify-center opacity-70 sm:opacity-0 sm:group-hover/carousel:opacity-100 hover:scale-105 active:scale-95 transition-all duration-200 z-30 shadow-md cursor-pointer"
                         title="Previous image"
                       >
-                        <ChevronLeft size={16} className="stroke-[2.5]" />
+                        <ChevronLeft size={20} className="stroke-[2.5]" />
                       </button>
 
                       <button
@@ -649,10 +666,10 @@ export const PostCard = React.memo(
                             prev < slides.length - 1 ? prev + 1 : 0,
                           );
                         }}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/45 hover:bg-black/70 text-white flex items-center justify-center opacity-70 sm:opacity-0 sm:group-hover/carousel:opacity-100 hover:scale-105 active:scale-95 transition-all duration-200 z-30 shadow-md cursor-pointer"
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 w-12 h-12 rounded-full bg-black/45 hover:bg-black/70 text-white flex items-center justify-center opacity-70 sm:opacity-0 sm:group-hover/carousel:opacity-100 hover:scale-105 active:scale-95 transition-all duration-200 z-30 shadow-md cursor-pointer"
                         title="Next image"
                       >
-                        <ChevronRight size={16} className="stroke-[2.5]" />
+                        <ChevronRight size={20} className="stroke-[2.5]" />
                       </button>
                     </>
                   )}
@@ -686,7 +703,7 @@ export const PostCard = React.memo(
             <div className="relative z-20 px-3 pt-3 flex items-start justify-between w-full pointer-events-none">
               {/* Select Checkbox (Hover-revealed or active) */}
               <div
-                className="z-30 pointer-events-auto"
+                className="z-30 pointer-events-auto relative w-12 h-12 flex items-center justify-center -mt-3 -ml-3"
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleSelect(e);
@@ -750,14 +767,14 @@ export const PostCard = React.memo(
                   type="button"
                   onClick={handleToggleFavorite}
                   whileTap={{ scale: 1.4 }}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
                     post.isFavorite
                       ? "bg-m3-primary text-m3-on-primary"
                       : "text-white hover:bg-white/20"
                   }`}
                   title={post.isFavorite ? "Remove from Favorites" : "Add to Favorites"}
                 >
-                  <Heart size={15} fill={post.isFavorite ? "currentColor" : "none"} />
+                  <Heart size={18} fill={post.isFavorite ? "currentColor" : "none"} />
                 </motion.button>
 
                 {/* Archive toggle */}
@@ -765,14 +782,14 @@ export const PostCard = React.memo(
                   type="button"
                   onClick={handleToggleArchive}
                   whileTap={{ scale: 1.15 }}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
                     post.isArchived
                       ? "bg-m3-primary text-m3-on-primary"
                       : "text-white hover:bg-white/20"
                   }`}
                   title={post.isArchived ? "Unarchive Post" : "Archive Post"}
                 >
-                  <Archive size={14} />
+                  <Archive size={16} />
                 </motion.button>
 
                 {/* Download HD Media / Reel */}
@@ -787,10 +804,10 @@ export const PostCard = React.memo(
                     });
                   }}
                   whileTap={{ scale: 1.15 }}
-                  className="w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer text-white hover:bg-white/20"
+                  className="w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer text-white hover:bg-white/20"
                   title={isVideo ? "Download HD Reel / Video" : "Download Media"}
                 >
-                  <Download size={14} />
+                  <Download size={16} />
                 </motion.button>
 
                 {/* Inline Tag Input activator */}
@@ -801,14 +818,14 @@ export const PostCard = React.memo(
                     setShowTagInput(true);
                   }}
                   whileTap={{ scale: 1.15 }}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
+                  className={`w-12 h-12 rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95 cursor-pointer ${
                     showTagInput
                       ? "bg-m3-primary text-m3-on-primary"
                       : "text-white hover:bg-white/20"
                   }`}
                   title="Add Tag Directly"
                 >
-                  <Plus size={15} />
+                  <Plus size={18} />
                 </motion.button>
               </div>
             </div>
@@ -1010,6 +1027,54 @@ export const PostCard = React.memo(
                 : "bg-m3-surface-low border-m3-outline-variant/25 hover:border-m3-outline/40 hover:-translate-y-1 hover:shadow-[0_12px_30px_-4px_rgba(0,0,0,0.08)] hover:z-10 cursor-pointer"
         }`}
       >
+        {/* Success Feedback Animation Overlay (Peak-End Rule) */}
+        <AnimatePresence>
+          {successAnimationType && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-[100] pointer-events-auto"
+            >
+              {/* Checkmark Morphing Circle */}
+              <motion.div
+                initial={{ scale: 0.3, rotate: -45 }}
+                animate={{ scale: [0.3, 1.2, 1], rotate: 0 }}
+                exit={{ scale: 0.5, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 300, damping: 15 }}
+                className="w-16 h-16 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-lg"
+              >
+                <motion.svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={3}
+                  className="w-8 h-8"
+                  initial={{ pathLength: 0 }}
+                  animate={{ pathLength: 1 }}
+                  transition={{ delay: 0.15, duration: 0.45, ease: "easeOut" }}
+                >
+                  <motion.path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M5 13l4 4L19 7"
+                  />
+                </motion.svg>
+              </motion.div>
+              
+              <motion.span
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className="font-display text-sm font-extrabold tracking-tight text-white drop-shadow-md bg-black/30 px-3 py-1 rounded-full border border-white/10"
+              >
+                {successAnimationType === "archive" ? "Archived Successfully" : "Added to Collection"}
+              </motion.span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* ================= FULL COVER MEDIA CAROUSEL ================= */}
         <motion.div
           layoutId={`post-media-${post.id}`}
@@ -1106,10 +1171,10 @@ export const PostCard = React.memo(
                     e.stopPropagation();
                     onClose();
                   }}
-                  className="z-30 w-8 h-8 rounded-full bg-black/45 hover:bg-black/75 text-white flex items-center justify-center border border-white/20 shadow-md backdrop-blur-md cursor-pointer transition-all duration-200 hover:scale-110 active:scale-95 mb-1"
+                  className="z-30 w-12 h-12 rounded-full bg-black/45 hover:bg-black/75 text-white flex items-center justify-center border border-white/20 shadow-md backdrop-blur-md cursor-pointer transition-all duration-200 hover:scale-110 active:scale-95 mb-1"
                   title="Go Back"
                 >
-                  <ArrowLeft size={16} className="stroke-[2.5]" />
+                  <ArrowLeft size={20} className="stroke-[2.5]" />
                 </button>
               )}
 
@@ -1182,10 +1247,10 @@ export const PostCard = React.memo(
                           e.stopPropagation();
                           handleRemoveCollection(col);
                         }}
-                        className="hover:bg-white/30 p-2 sm:p-0.5 -mr-1.5 sm:-mr-0 rounded-full cursor-pointer"
+                        className="hover:bg-white/30 p-3 sm:p-1 -mr-2 sm:-mr-0.5 rounded-full cursor-pointer flex items-center justify-center w-12 h-12 sm:w-6 sm:h-6"
                         title={`Remove from ${col}`}
                       >
-                        <X size={7} />
+                        <X size={10} />
                       </button>
                     </span>
                   ))}
@@ -1198,14 +1263,14 @@ export const PostCard = React.memo(
                       e.stopPropagation();
                       setShowColDropdown((prev) => !prev);
                     }}
-                    className={`w-5 h-5 rounded-full flex items-center justify-center border transition-all cursor-pointer backdrop-blur-md ${
+                    className={`w-12 h-12 rounded-full flex items-center justify-center border transition-all cursor-pointer backdrop-blur-md ${
                       showColDropdown
                         ? "bg-m3-primary text-m3-on-primary border-m3-primary"
                         : "bg-black/30 text-white/90 border-white/25 hover:bg-white/20 hover:border-white"
                     }`}
                     title={t.addToCollection}
                   >
-                    <Plus size={10} className="stroke-[2.5]" />
+                    <Plus size={18} className="stroke-[2.5]" />
                   </button>
 
                   {/* Collections Selector Dropdown */}
@@ -1367,13 +1432,13 @@ export const PostCard = React.memo(
 
             {/* Interactions Row */}
             <div className="flex items-center justify-between mt-2.5 animate-none">
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
                 {/* Heart / Favorite */}
                 <motion.button
                   type="button"
                   onClick={handleToggleFavorite}
                   whileTap={{ scale: 1.4 }}
-                  className={`transition-colors cursor-pointer drop-shadow-md ${
+                  className={`w-12 h-12 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors cursor-pointer drop-shadow-md ${
                     post.isFavorite
                       ? "text-m3-primary hover:text-m3-primary"
                       : "text-white/90 hover:text-white"
@@ -1400,7 +1465,7 @@ export const PostCard = React.memo(
                     e.stopPropagation();
                     setShowNotesPanel((prev) => !prev);
                   }}
-                  className={`transition-colors cursor-pointer drop-shadow-md ${
+                  className={`w-12 h-12 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors cursor-pointer drop-shadow-md ${
                     showNotesPanel
                       ? "text-white"
                       : "text-white/90 hover:text-white"
@@ -1417,7 +1482,7 @@ export const PostCard = React.memo(
                 <button
                   type="button"
                   onClick={handleToggleArchive}
-                  className={`transition-colors cursor-pointer drop-shadow-md ${
+                  className={`w-12 h-12 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors cursor-pointer drop-shadow-md ${
                     post.isArchived
                       ? "text-m3-primary hover:text-m3-primary"
                       : "text-white/90 hover:text-white"
@@ -1441,7 +1506,7 @@ export const PostCard = React.memo(
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
-                    className="text-white/90 hover:text-white transition-colors flex items-center justify-center cursor-pointer drop-shadow-md"
+                    className="w-12 h-12 flex items-center justify-center rounded-full hover:bg-white/10 text-white/90 hover:text-white transition-colors cursor-pointer drop-shadow-md"
                     title="Open original post on Instagram"
                   >
                     <ExternalLink size={20} />
@@ -1449,12 +1514,12 @@ export const PostCard = React.memo(
                 )}
               </div>
 
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
                 {/* Read Later Bookmark */}
                 <button
                   type="button"
                   onClick={handleToggleReadLater}
-                  className={`transition-colors cursor-pointer drop-shadow-md ${
+                  className={`w-12 h-12 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors cursor-pointer drop-shadow-md ${
                     post.readLater
                       ? "text-m3-primary hover:text-m3-primary"
                       : "text-white/90 hover:text-white"
@@ -1479,7 +1544,7 @@ export const PostCard = React.memo(
                       navigator.clipboard.writeText(post.postUrl || "");
                       toast.success(t.linkCopied);
                     }}
-                    className="text-white/90 hover:text-white transition-colors cursor-pointer drop-shadow-md"
+                    className="w-12 h-12 flex items-center justify-center rounded-full hover:bg-white/10 text-white/90 hover:text-white transition-colors cursor-pointer drop-shadow-md"
                     title="Copy original post URL"
                   >
                     <Copy size={20} />

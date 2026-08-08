@@ -31,6 +31,8 @@ import { Post } from "../../types/post";
 import { usePostStore } from "../../store/useStore";
 import { VOCABULARY } from "../../constants/vocabulary";
 import { CalendarHeatmap } from "../../components/ui/CalendarHeatmap";
+import { EmptyState } from "../../components/ui/EmptyState";
+import emptyAnalyticsImg from "../../assets/images/empty_analytics_1786223930572.jpg";
 
 interface AnalyticsViewProps {
   posts: Post[];
@@ -439,30 +441,25 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = React.memo(
 
     if (posts.length === 0) {
       return (
-        <div className="flex-1 bg-m3-surface overflow-y-auto p-4 md:p-6 max-w-4xl mx-auto w-full flex flex-col items-center justify-center min-h-[400px] text-center select-none">
-          <div className="max-w-md p-8 bg-m3-surface-low border border-m3-outline-variant/25 rounded-[32px] flex flex-col items-center gap-6">
-            <div className="w-16 h-16 rounded-full bg-m3-primary/10 flex items-center justify-center text-m3-primary">
-              <TrendingUp size={32} className="stroke-[1.5]" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-xl font-bold font-display text-m3-on-surface">
-                No Analytics Data
-              </h2>
-              <p className="text-sm text-m3-on-surface-variant/90 leading-relaxed font-sans">
-                To visualize your saving trends, media mix distribution, popular tags, and active creator statistics, please import your Instagram bookmark export file first.
-              </p>
-            </div>
-            <motion.button
-              whileHover={{ scale: 1.02, y: -2 }}
-              whileTap={{ scale: 0.98 }}
-              onClick={() => {
-                usePostStore.getState().setIsImportModalOpen(true);
-              }}
-              className="px-6 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-bold text-xs flex items-center gap-2 shadow-sm cursor-pointer hover:bg-opacity-90 active:scale-95 transition-all"
-            >
-              <span>Import Data</span>
-            </motion.button>
-          </div>
+        <div className="flex-1 bg-m3-surface overflow-y-auto p-4 md:p-6 max-w-4xl mx-auto w-full flex flex-col items-center justify-center min-h-[450px] text-center select-none">
+          <EmptyState
+            title="No Analytics Data Available"
+            message="To visualize your saving trends, media mix distribution, popular tags, and active creator statistics, please import your Instagram bookmark export file first."
+            illustrationSrc={emptyAnalyticsImg}
+            illustrationAlt="Empty Analytics Illustration"
+            action={
+              <motion.button
+                whileHover={{ scale: 1.02, y: -2 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => {
+                  usePostStore.getState().setIsImportModalOpen(true);
+                }}
+                className="px-6 py-3 rounded-2xl bg-m3-primary text-m3-on-primary font-bold text-xs flex items-center gap-2 shadow-sm cursor-pointer hover:bg-opacity-90 active:scale-95 transition-all"
+              >
+                <span>Import Data</span>
+              </motion.button>
+            }
+          />
         </div>
       );
     }

@@ -16,6 +16,8 @@ import {
   LayoutGrid,
   List,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Hash,
   ExternalLink,
   ArrowLeft,
@@ -34,7 +36,17 @@ import {
   Search,
   Clock,
   AlertTriangle,
+  Keyboard,
+  Shield,
+  Command,
 } from "lucide-react";
+import { KeyboardShortcutsTab } from "./components/KeyboardShortcutsTab";
+import { ProfileTab } from "./components/ProfileTab";
+import { PreferencesTab } from "./components/PreferencesTab";
+import { ScraperTab } from "./components/ScraperTab";
+import { MaintenanceTab } from "./components/MaintenanceTab";
+import { BackupTab } from "./components/BackupTab";
+import { TelemetryTab } from "./components/TelemetryTab";
 import { motion, AnimatePresence } from "motion/react";
 import toast from "react-hot-toast";
 import { usePostStore } from "../../store/useStore";
@@ -59,6 +71,61 @@ interface SettingsViewProps {
   theme?: "light" | "dark";
   onThemeToggle?: () => void;
 }
+
+// Settings Section Header Component
+interface SettingSectionHeaderProps {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+  action?: React.ReactNode;
+}
+
+const SettingSectionHeader: React.FC<SettingSectionHeaderProps> = ({
+  icon,
+  title,
+  subtitle,
+  action,
+}) => (
+  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-m3-outline-variant/30">
+    <div className="flex items-center gap-3">
+      <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary border border-m3-primary/20 shrink-0">
+        {icon}
+      </div>
+      <div>
+        <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
+          {title}
+        </h2>
+        <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+          {subtitle}
+        </p>
+      </div>
+    </div>
+    {action && <div className="shrink-0">{action}</div>}
+  </div>
+);
+
+interface UnifiedSwitchProps {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  ariaLabel?: string;
+}
+
+const UnifiedSwitch: React.FC<UnifiedSwitchProps> = ({ checked, onChange, ariaLabel }) => (
+  <button
+    type="button"
+    aria-label={ariaLabel}
+    onClick={() => onChange(!checked)}
+    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+      checked ? "bg-m3-primary" : "bg-m3-outline-variant"
+    }`}
+  >
+    <motion.span
+      className="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-m3-surface shadow-xs ring-0"
+      animate={{ x: checked ? 20 : 0 }}
+      transition={{ type: "spring", stiffness: 500, damping: 30 }}
+    />
+  </button>
+);
 
 export const SettingsView = React.memo(
   ({
@@ -94,6 +161,40 @@ export const SettingsView = React.memo(
         unregisterProgressCallback(updateStats);
       };
     }, [posts]);
+
+    type SettingsTab =
+      | "overview"
+      | "profile"
+      | "preferences"
+      | "shortcuts"
+      | "scraper"
+      | "maintenance"
+      | "backup"
+      | "telemetry";
+
+    const [activeTab, setActiveTab] = useState<SettingsTab>("overview");
+    const [settingsSearchQuery, setSettingsSearchQuery] = useState("");
+
+    // Auto-switch tab based on search query if query matches specific tab keywords
+    useEffect(() => {
+      if (!settingsSearchQuery.trim()) return;
+      const q = settingsSearchQuery.toLowerCase();
+      if (["shortcut", "key", "hotkey", "keyboard", "nav", "space", "enter", "escape"].some((k) => q.includes(k))) {
+        setActiveTab("shortcuts");
+      } else if (["proxy", "cookie", "session", "instaloader", "probe", "gql", "scraper", "password"].some((k) => q.includes(k))) {
+        setActiveTab("scraper");
+      } else if (["log", "crash", "freeze", "error", "telemetry", "stack", "observability"].some((k) => q.includes(k))) {
+        setActiveTab("telemetry");
+      } else if (["backup", "export", "json", "csv", "reset", "wipe", "factory", "clear"].some((k) => q.includes(k))) {
+        setActiveTab("backup");
+      } else if (["storage", "quota", "thumbnail", "index", "duplicate", "tag", "cache"].some((k) => q.includes(k))) {
+        setActiveTab("maintenance");
+      } else if (["theme", "dark", "light", "compact", "grid", "motion", "anim", "worker", "organizer"].some((k) => q.includes(k))) {
+        setActiveTab("preferences");
+      } else if (["profile", "curator", "avatar", "handle", "email", "name"].some((k) => q.includes(k))) {
+        setActiveTab("profile");
+      }
+    }, [settingsSearchQuery]);
 
     // Scraper throttle/rate-limiting status
     const [throttleStatus, setThrottleStatus] = useState({
@@ -303,6 +404,23 @@ export const SettingsView = React.memo(
       }
     };
 
+    const handleAnalyzeDuplicates = () => {
+      const seen = new Set<string>();
+      let dupCount = 0;
+      posts.forEach((p) => {
+        if (p.id && seen.has(p.id)) {
+          dupCount++;
+        } else if (p.id) {
+          seen.add(p.id);
+        }
+      });
+      if (dupCount > 0) {
+        toast.success(`Scan complete: Found ${dupCount} duplicate record${dupCount > 1 ? "s" : ""}.`);
+      } else {
+        toast.success("Scan complete: No duplicate records found in local database.");
+      }
+    };
+
     const setToast = useCallback((val: { type: "success" | "error"; message: string } | null) => {
       if (val) {
         if (val.type === "success") {
@@ -363,13 +481,55 @@ export const SettingsView = React.memo(
     );
 
     const handleSetAnimationsEnabled = useCallback((val: boolean) => {
+      triggerVibration("light");
       setAnimationsEnabled(val);
       localStorage.setItem("instasorter_animations", val.toString());
+      toast.success(val ? "Motion animations enabled." : "Motion animations disabled.");
     }, []);
 
     const handleSetCompactMode = useCallback((val: boolean) => {
+      triggerVibration("light");
       setCompactMode(val);
       localStorage.setItem("instasorter_compact", val.toString());
+      toast.success(val ? "Compact grid density enabled." : "Standard grid density restored.");
+    }, []);
+
+    // Accordion State for Hick's Law compliance
+    const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({
+      storage: false,
+      scraper: false,
+      backup: false,
+      telemetry: false,
+    });
+
+    const toggleAccordion = useCallback((key: string) => {
+      triggerVibration("light");
+      setExpandedAccordions((prev) => ({
+        ...prev,
+        [key]: !prev[key],
+      }));
+    }, []);
+
+    const expandAllAccordions = useCallback(() => {
+      triggerVibration("light");
+      setExpandedAccordions({
+        storage: true,
+        scraper: true,
+        backup: true,
+        telemetry: true,
+      });
+      toast.success("Expanded all advanced sections.");
+    }, []);
+
+    const collapseAllAccordions = useCallback(() => {
+      triggerVibration("light");
+      setExpandedAccordions({
+        storage: false,
+        scraper: false,
+        backup: false,
+        telemetry: false,
+      });
+      toast.success("Collapsed all advanced sections.");
     }, []);
 
     // Storage Stats
@@ -623,875 +783,639 @@ export const SettingsView = React.memo(
       setToast({ type: "success", message: "Tags normalized and consolidated successfully!" });
     };
 
-    const handleAnalyzeDuplicates = async () => {
-      setToast({ type: "success", message: "Library scan complete: No duplicate posts found." });
-    };
+    const tabsList: {
+      id: SettingsTab;
+      label: string;
+      icon: React.ReactNode;
+      badge?: string | number;
+    }[] = [
+      { id: "overview", label: "Overview", icon: <LayoutGrid size={15} /> },
+      { id: "profile", label: "Profile", icon: <User size={15} />, badge: displayName || "Curator" },
+      { id: "preferences", label: "Preferences", icon: <Sliders size={15} /> },
+      { id: "shortcuts", label: "Shortcuts", icon: <Keyboard size={15} />, badge: "Hotkeys" },
+      { id: "maintenance", label: "Storage & Cache", icon: <Database size={15} />, badge: posts.length },
+      { id: "scraper", label: "Scraper Config", icon: <Cpu size={15} /> },
+      { id: "backup", label: "Backup & Export", icon: <Layers size={15} /> },
+      { id: "telemetry", label: "Observability", icon: <Terminal size={15} />, badge: logStats.total },
+    ];
+
+    const settingsCategories: {
+      id: string;
+      title: string;
+      tabs: {
+        id: SettingsTab;
+        label: string;
+        icon: React.ReactNode;
+        badge?: string | number;
+      }[];
+    }[] = [
+      {
+        id: "general",
+        title: "General Curation",
+        tabs: [
+          { id: "overview", label: "Overview", icon: <LayoutGrid size={15} /> },
+          { id: "profile", label: "Profile & Identity", icon: <User size={15} />, badge: displayName || "Curator" },
+          { id: "preferences", label: "Preferences & Theme", icon: <Sliders size={15} /> },
+          { id: "shortcuts", label: "Keyboard Shortcuts", icon: <Keyboard size={15} />, badge: "Hotkeys" },
+        ]
+      },
+      {
+        id: "data",
+        title: "Data Management",
+        tabs: [
+          { id: "maintenance", label: "Storage & Cache", icon: <Database size={15} />, badge: posts.length },
+          { id: "scraper", label: "Scraper Engine", icon: <Cpu size={15} /> },
+          { id: "backup", label: "Backup & Export", icon: <Layers size={15} /> },
+        ]
+      },
+      {
+        id: "advanced",
+        title: "Advanced System",
+        tabs: [
+          { id: "telemetry", label: "System Telemetry", icon: <Terminal size={15} />, badge: logStats.total },
+        ]
+      }
+    ];
 
     return (
       <div className="flex-1 bg-m3-surface select-none flex flex-col min-h-0 h-full overflow-hidden">
-        {/* Top Header */}
+        {/* Top Header & Search Bar */}
         <header className="border-b border-m3-outline-variant/40 bg-m3-surface shadow-xs z-10 shrink-0 flex flex-col">
-          <div className="px-4 md:px-6 py-4 flex items-center justify-between">
-            <h1 className="text-base sm:text-lg md:text-xl font-bold font-display tracking-tight text-m3-on-surface leading-none">
-              {t.title}
-            </h1>
-          </div>
-        </header>
-
-        {/* Scrollable Content Container */}
-        <div className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-8 max-w-5xl mx-auto w-full space-y-10">
-
-          {/* ================= SECTION 1: ACCOUNT ================= */}
-          <section className="space-y-4">
-            <div className="flex items-center gap-2.5 pb-2 border-b border-m3-outline-variant/30">
-              <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
-                <User size={18} />
-              </div>
-              <div>
-                <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
-                  Account &amp; Curator Profile
-                </h2>
-                <p className="text-[11px] text-m3-on-surface-variant">
-                  Display name, Instagram handle, email credentials, and library metrics.
-                </p>
-              </div>
-            </div>
-
-            {/* Profile Card */}
-            <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-7 shadow-xs transition-all duration-300">
-              <div className="flex flex-col sm:flex-row gap-6 items-center sm:items-start">
-                {/* Avatar with Camera Upload Overlay */}
-                <div className="relative group/avatar shrink-0">
-                  <div className="w-20 h-20 rounded-full bg-m3-primary/10 border border-m3-outline-variant/30 text-m3-primary flex items-center justify-center font-display font-bold text-2xl shadow-xs overflow-hidden relative">
-                    {avatarUrl ? (
-                      <img
-                        src={avatarUrl}
-                        alt="Curator Avatar"
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <>
-                        <div className="absolute inset-0 bg-m3-primary-container/20" />
-                        <span className="relative z-10">
-                          {(displayName || "Curator")
-                            .split(" ")
-                            .map((n) => (n ? n[0] : ""))
-                            .join("")
-                            .toUpperCase()
-                            .substring(0, 2)}
-                        </span>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Camera Upload Button Overlay */}
-                  <button
-                    type="button"
-                    onClick={() => avatarInputRef.current?.click()}
-                    className="absolute bottom-0 right-0 p-1.5 rounded-full bg-m3-primary text-m3-on-primary hover:scale-110 active:scale-95 transition-all shadow-md cursor-pointer border border-m3-surface"
-                    title="Upload profile picture"
-                  >
-                    <Camera size={12} />
-                  </button>
-
-                  {/* Clear Avatar Button (if custom avatar uploaded) */}
-                  {avatarUrl && (
-                    <button
-                      type="button"
-                      onClick={handleRemoveAvatar}
-                      className="absolute -top-1 -right-1 p-1 rounded-full bg-red-600 text-white hover:bg-red-700 transition-all shadow-xs cursor-pointer border border-m3-surface"
-                      title="Remove profile picture"
-                    >
-                      <X size={10} />
-                    </button>
-                  )}
-
-                  <input
-                    ref={avatarInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleAvatarUpload}
-                    className="hidden"
-                  />
-                </div>
-
-                <div className="flex-1 flex flex-col justify-center text-center sm:text-left w-full">
-                  {isEditing ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
-                      <div>
-                        <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
-                          Display Name
-                        </label>
-                        <input
-                          type="text"
-                          value={displayName}
-                          onChange={(e) => setDisplayName(e.target.value)}
-                          className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
-                          placeholder="Enter name"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
-                          Instagram Handle
-                        </label>
-                        <input
-                          type="text"
-                          value={username}
-                          onChange={(e) => setUsername(e.target.value)}
-                          className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
-                          placeholder="Enter Instagram username"
-                        />
-                      </div>
-                      <div className="sm:col-span-2">
-                        <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
-                          Email Address
-                        </label>
-                        <input
-                          type="email"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
-                          placeholder="Enter email address"
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <h3 className="text-xl font-bold font-display text-m3-on-surface">
-                        {displayName || "Curator"}
-                      </h3>
-                      {username && (
-                        <p className="text-sm font-semibold text-m3-primary">
-                          @{username}
-                        </p>
-                      )}
-                      {email && (
-                        <p className="text-xs text-m3-on-surface-variant font-medium mt-1 flex items-center justify-center sm:justify-start gap-1.5">
-                          <Mail size={12} className="text-m3-outline" />
-                          <span>{email}</span>
-                        </p>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="mt-5 flex justify-center sm:justify-start">
-                    {isEditing ? (
-                      <button
-                        onClick={handleSaveProfile}
-                        className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl px-5 py-2 text-xs font-bold cursor-pointer hover:bg-m3-primary/95 transition-all shadow-xs active:scale-95"
-                      >
-                        <Save size={12} />
-                        <span>Save Changes</span>
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setIsEditing(true)}
-                        className="flex items-center gap-1.5 border border-m3-outline-variant/60 hover:border-m3-primary hover:text-m3-primary bg-m3-surface rounded-xl px-5 py-2 text-xs font-bold cursor-pointer transition-all shadow-2xs active:scale-95"
-                      >
-                        <Edit2 size={11} />
-                        <span>Edit Curator Credentials</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Quick Stat Badges */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-6 border-t border-m3-outline-variant/10">
-                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Total Posts</span>
-                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{totalPosts}</span>
-                </div>
-                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Favorites</span>
-                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{favoritesCount}</span>
-                </div>
-                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Collections</span>
-                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{allCollections.length}</span>
-                </div>
-                <div className="bg-m3-surface/60 p-3 rounded-xl border border-m3-outline-variant/20">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-outline block font-bold">Tags</span>
-                  <span className="text-lg font-extrabold font-display text-m3-on-surface mt-0.5 block">{uniqueTags}</span>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          {/* ================= SECTION 2: STORAGE & DATA ================= */}
-          <section className="space-y-4">
-            <div className="flex items-center gap-2.5 pb-2 border-b border-m3-outline-variant/30">
-              <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
-                <Database size={18} />
-              </div>
-              <div>
-                <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
-                  Storage &amp; Data
-                </h2>
-                <p className="text-[11px] text-m3-on-surface-variant">
-                  Manage browser IndexedDB cache, media downloader stats, backups, and library reset.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4">
-              {/* Storage Quota Card */}
-              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-3.5">
-                  <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary">
-                    <HardDrive size={20} />
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-m3-on-surface">Browser Storage Quota</h4>
-                    <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-                      {storageInfo
-                        ? `${(storageInfo.usage / (1024 * 1024)).toFixed(2)} MB used of ${(storageInfo.quota / (1024 * 1024 * 1024)).toFixed(1)} GB available`
-                        : "Calculating storage usage..."}
-                    </p>
-                  </div>
-                </div>
-                <div className="w-full sm:w-48 bg-m3-surface-container rounded-full h-2.5 overflow-hidden border border-m3-outline-variant/30">
-                  <div
-                    className="bg-m3-primary h-full rounded-full transition-all duration-500"
-                    style={{ width: `${storageInfo?.percentage || 0}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Background Auto-Organizer Worker Toggle Card */}
-              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="flex items-start gap-3.5 min-w-0">
-                    <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary shrink-0 mt-0.5">
-                      <Cpu size={20} />
-                    </div>
-                    <div className="min-w-0">
-                      <h4 className="text-xs font-bold text-m3-on-surface">Background Auto-Organizer Worker</h4>
-                      <p className="text-[11px] text-m3-on-surface-variant mt-1 leading-relaxed">
-                        Periodically scans, deduplicates, and organizes newly imported posts. Toggle off to save power and reduce CPU overhead when on battery.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
-                    <div className="text-right">
-                      <span className="text-[10px] font-mono text-m3-outline uppercase block font-bold">Status</span>
-                      <div className="flex items-center gap-1.5 mt-0.5 justify-end">
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          !isBackgroundOrganizerEnabled 
-                            ? "bg-gray-400" 
-                            : backgroundOrganizerStatus === "running" 
-                            ? "bg-emerald-500 animate-pulse" 
-                            : backgroundOrganizerStatus === "completed"
-                            ? "bg-blue-500"
-                            : "bg-emerald-400"
-                        }`} />
-                        <span className="text-[10px] font-semibold text-m3-on-surface-variant capitalize">
-                          {!isBackgroundOrganizerEnabled 
-                            ? "Disabled" 
-                            : backgroundOrganizerStatus === "running" 
-                            ? "Active..." 
-                            : backgroundOrganizerStatus === "completed"
-                            ? "Completed"
-                            : "Idle"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => {
-                        setIsBackgroundOrganizerEnabled(!isBackgroundOrganizerEnabled);
-                        toast.success(
-                          !isBackgroundOrganizerEnabled 
-                            ? "Background auto-organizer enabled." 
-                            : "Background auto-organizer disabled to save power."
-                        );
-                      }}
-                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                        isBackgroundOrganizerEnabled ? "bg-m3-primary" : "bg-m3-outline-variant"
-                      }`}
-                    >
-                      <span
-                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-m3-surface shadow-xs ring-0 transition duration-200 ease-in-out ${
-                          isBackgroundOrganizerEnabled ? "translate-x-5" : "translate-x-0"
-                        }`}
-                      />
-                    </button>
-                  </div>
-                </div>
-
-                {isBackgroundOrganizerEnabled && backgroundOrganizerStatus === "running" && (
-                  <div className="space-y-1.5 pt-2 border-t border-m3-outline-variant/10">
-                    <div className="flex justify-between text-[9px] font-mono text-m3-outline">
-                      <span>Scanning & grouping posts...</span>
-                      <span>{backgroundOrganizerProgress}%</span>
-                    </div>
-                    <div className="w-full bg-m3-surface-container rounded-full h-1 overflow-hidden">
-                      <div
-                        className="bg-emerald-500 h-full rounded-full transition-all duration-300"
-                        style={{ width: `${backgroundOrganizerProgress}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Cache & Thumbnail Optimization Card */}
-              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
-                    <h4 className="text-xs font-bold text-m3-on-surface">Thumbnail &amp; Cache Maintenance</h4>
-                    <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-                      Targeted low-intensity re-indexing for posts lacking thumbnails or with failed processing status.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    {workerStats.failed > 0 && (
-                      <button
-                        onClick={() => retryFailedThumbnails()}
-                        className="flex items-center gap-1.5 bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer hover:bg-amber-500/20 transition-all shadow-2xs active:scale-95"
-                      >
-                        <RefreshCw size={12} />
-                        <span>Retry Failed ({workerStats.failed})</span>
-                      </button>
-                    )}
-                    <button
-                      onClick={handleRefreshLibrary}
-                      disabled={isRefreshingLibrary}
-                      className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer hover:bg-m3-primary/90 transition-all shadow-xs active:scale-95 disabled:opacity-50"
-                    >
-                      <RefreshCw size={13} className={isRefreshingLibrary ? "animate-spin" : ""} />
-                      <span>{isRefreshingLibrary ? "Re-indexing..." : "Refresh Library"}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-m3-outline-variant/10">
-                  <button
-                    onClick={handleRefreshLibrary}
-                    disabled={isRefreshingLibrary}
-                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95 disabled:opacity-50"
-                  >
-                    <RefreshCw size={14} className={`text-m3-primary ${isRefreshingLibrary ? "animate-spin" : ""}`} />
-                    <span>Refresh Library</span>
-                  </button>
-                  <button
-                    onClick={handleAnalyzeDuplicates}
-                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
-                  >
-                    <Layers size={14} className="text-m3-primary" />
-                    <span>Scan Duplicates</span>
-                  </button>
-                  <button
-                    onClick={handleConsolidateTags}
-                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
-                  >
-                    <Hash size={14} className="text-m3-primary" />
-                    <span>Normalize Tags</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Instagram Scraper Credentials & Proxy Configuration */}
-              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
-                <div className="flex items-center gap-2 pb-2 border-b border-m3-outline-variant/10">
-                  <Sliders size={16} className="text-m3-primary" />
-                  <h4 className="text-xs font-bold text-m3-on-surface">Instagram Scraper Configuration &amp; Proxy</h4>
-                </div>
-                
-                <p className="text-[11px] text-m3-on-surface-variant">
-                  Configure account credentials, session cookies, and proxies to bypass Instagram's strict rate limits and extraction blocks completely. This configures both the Instaloader Python Bridge and Direct GraphQL Scraping engines.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
-                      Instagram Username
-                    </label>
-                    <input
-                      type="text"
-                      value={scrapingUser}
-                      onChange={(e) => setScrapingUser(e.target.value)}
-                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
-                      placeholder="e.g. instasorter_curator"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
-                      Instagram Password
-                    </label>
-                    <input
-                      type="password"
-                      value={scrapingPass}
-                      onChange={(e) => setScrapingPass(e.target.value)}
-                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
-                      placeholder="Leave empty to preserve saved password"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
-                      Active Session Cookie (sessionid)
-                    </label>
-                    <textarea
-                      value={scrapingSession}
-                      onChange={(e) => setScrapingSession(e.target.value)}
-                      rows={2}
-                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-mono text-m3-on-surface resize-none"
-                      placeholder="Paste your Instagram sessionid cookie value here for highly stable scrapers"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <label className="block text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider mb-1">
-                      HTTP/SOCKS5 Proxy (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={scrapingProxy}
-                      onChange={(e) => setScrapingProxy(e.target.value)}
-                      className="w-full px-3.5 py-2.5 text-xs bg-m3-surface rounded-xl border border-m3-outline-variant focus:outline-none focus:ring-1 focus:ring-m3-primary transition-all font-sans text-m3-on-surface"
-                      placeholder="e.g. http://username:password@ip:port or socks5://ip:port"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end pt-2">
-                  <button
-                    onClick={handleSaveScrapingConfig}
-                    disabled={savingConfig}
-                    className="flex items-center gap-1.5 bg-m3-primary text-m3-on-primary rounded-xl px-5 py-2.5 text-xs font-bold cursor-pointer hover:bg-m3-primary/95 transition-all shadow-xs active:scale-95 disabled:opacity-50"
-                  >
-                    {savingConfig ? (
-                      <>
-                        <RefreshCw size={12} className="animate-spin" />
-                        <span>Saving configuration...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save size={12} />
-                        <span>Save Scraper Configuration</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Scraper Pipeline Diagnostic Console */}
-              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
-                <div className="flex items-center gap-2 pb-2 border-b border-m3-outline-variant/10">
-                  <Terminal size={16} className="text-m3-primary" />
-                  <h4 className="text-xs font-bold text-m3-on-surface">Interactive Diagnostics Console</h4>
-                </div>
-
-                <p className="text-[11px] text-m3-on-surface-variant">
-                  Test the active bridged engines with a live query using your newly configured credentials and proxies. This prints real-time debug responses.
-                </p>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Instaloader Section */}
-                  <div className="p-4 rounded-xl bg-m3-surface border border-m3-outline-variant/30 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider">Engine A</span>
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 text-[9px] font-mono font-bold">
-                        Instaloader Bridge
-                      </span>
-                    </div>
-                    <button
-                      onClick={handleTestInstaloader}
-                      disabled={testingInstaloader}
-                      className="w-full flex items-center justify-center gap-1.5 py-2.5 border border-m3-outline-variant/60 hover:border-m3-primary hover:text-m3-primary bg-m3-surface rounded-xl text-xs font-bold cursor-pointer transition-all shadow-2xs active:scale-95 disabled:opacity-50"
-                    >
-                      <Terminal size={12} className="text-m3-primary" />
-                      <span>{testingInstaloader ? "Running Bridge..." : "Run Test Probe"}</span>
-                    </button>
-
-                    {instaloaderResult && (
-                      <div className="p-3 rounded-lg bg-m3-surface-low border border-m3-outline-variant/20 font-mono text-[10px] space-y-1.5 max-h-48 overflow-y-auto">
-                        <div className="font-bold text-m3-on-surface">
-                          Result: {instaloaderResult.success ? "✅ Success" : "ℹ️ Fallback Enabled"}
-                        </div>
-                        <pre className="text-[9px] text-m3-on-surface-variant whitespace-pre-wrap">
-                          {JSON.stringify(instaloaderResult, null, 2)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* ahmedrangel/instagram-media-scraper Section */}
-                  <div className="p-4 rounded-xl bg-m3-surface border border-m3-outline-variant/30 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-mono font-bold text-m3-outline uppercase tracking-wider">Engine B</span>
-                      <span className="px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 text-[9px] font-mono font-bold">
-                        Direct GQL/API Scraper
-                      </span>
-                    </div>
-                    <button
-                      onClick={handleTestMediaScraper}
-                      disabled={testingMediaScraper}
-                      className="w-full flex items-center justify-center gap-1.5 py-2.5 border border-m3-outline-variant/60 hover:border-m3-primary hover:text-m3-primary bg-m3-surface rounded-xl text-xs font-bold cursor-pointer transition-all shadow-2xs active:scale-95 disabled:opacity-50"
-                    >
-                      <Terminal size={12} className="text-m3-primary" />
-                      <span>{testingMediaScraper ? "Running Direct GQL..." : "Run Test Probe"}</span>
-                    </button>
-
-                    {mediaScraperResult && (
-                      <div className="p-3 rounded-lg bg-m3-surface-low border border-m3-outline-variant/20 font-mono text-[10px] space-y-1.5 max-h-48 overflow-y-auto">
-                        <div className="font-bold text-m3-on-surface">
-                          Result: {mediaScraperResult.success ? "✅ Success" : "ℹ️ Fallback Enabled"}
-                        </div>
-                        <pre className="text-[9px] text-m3-on-surface-variant whitespace-pre-wrap">
-                          {JSON.stringify(mediaScraperResult, null, 2)}
-                        </pre>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Import & Export Card */}
-              <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 sm:p-6 shadow-xs space-y-4">
-                <div>
-                  <h4 className="text-xs font-bold text-m3-on-surface">Backup, Import &amp; Export</h4>
-                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-                    Download complete database backups in JSON or tabular spreadsheet format (CSV).
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                  <button
-                    onClick={exportData}
-                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
-                  >
-                    <Layers size={14} className="text-m3-primary" />
-                    <span>Export JSON Backup ({posts.length})</span>
-                  </button>
-                  <button
-                    onClick={exportCSVData}
-                    className="flex items-center justify-center gap-2 p-3 bg-m3-surface border border-m3-outline-variant/40 rounded-xl text-xs font-bold text-m3-on-surface hover:border-m3-primary transition-all cursor-pointer shadow-2xs active:scale-95"
-                  >
-                    <FileSpreadsheet size={14} className="text-green-600" />
-                    <span>Export Spreadsheet (CSV)</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Reset Library Card */}
-              <div className="bg-red-500/5 border border-red-500/15 rounded-[20px] p-5 sm:p-6 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div>
-                  <h4 className="text-xs font-bold text-red-600">Danger Zone: Reset Library</h4>
-                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-                    Clear all saved bookmarks or perform a hard factory reset of local storage.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2.5 w-full sm:w-auto">
-                  <button
-                    onClick={() => setShowConfirmClear(true)}
-                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-m3-surface border border-red-500/30 text-red-600 rounded-xl text-xs font-bold hover:bg-red-500/10 transition-all cursor-pointer shadow-2xs active:scale-95"
-                  >
-                    <Trash2 size={13} />
-                    <span>Clear Posts</span>
-                  </button>
-                  <button
-                    onClick={() => setShowConfirmClearAll(true)}
-                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-bold hover:bg-red-700 transition-all cursor-pointer shadow-xs active:scale-95"
-                  >
-                    <ShieldAlert size={13} />
-                    <span>Factory Reset</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
-
-
-          {/* ================= SECTION 3: PREFERENCES ================= */}
-          <section className="space-y-4">
-            <div className="flex items-center gap-2.5 pb-2 border-b border-m3-outline-variant/30">
-              <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
+          <div className="px-4 md:px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary border border-m3-primary/20 shrink-0">
                 <Sliders size={18} />
               </div>
-              <div>
-                <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
-                  Preferences &amp; Appearance
-                </h2>
-                <p className="text-[11px] text-m3-on-surface-variant">
-                  Customize color themes, motion animation transitions, and grid density.
+              <div className="min-w-0">
+                <h1 className="text-base sm:text-lg font-bold font-display tracking-tight text-m3-on-surface leading-none truncate">
+                  Settings &amp; System Preferences
+                </h1>
+                <p className="text-[11px] text-m3-on-surface-variant font-sans mt-0.5 truncate">
+                  Configure curator identity, visual themes, background workers, and backups.
                 </p>
               </div>
             </div>
 
-            <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] shadow-xs overflow-hidden divide-y divide-m3-outline-variant/10">
-              {/* Theme Toggle Option */}
-              <div className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h4 className="text-xs font-bold text-m3-on-surface">Color Palette Mode</h4>
-                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">Toggle between crisp studio light mode and dark room studio mode.</p>
-                </div>
-                <div className="shrink-0 flex items-center bg-m3-surface-container rounded-xl p-1 border border-m3-outline-variant/25 shadow-xs relative overflow-hidden min-w-[180px]">
-                  <div className="absolute inset-y-1 left-1 right-1 pointer-events-none select-none">
-                    <motion.div
-                      className="h-full bg-m3-surface rounded-lg border border-m3-outline-variant/30 shadow-xs"
-                      layout
-                      animate={{
-                        x: theme === "light" ? "0%" : "100%",
-                        width: "calc(50% - 4px)",
-                      }}
-                      transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                    />
-                  </div>
+            {/* Quick Actions & Settings Search */}
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Search Settings Input */}
+              <div className="relative flex-1 sm:w-56">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-m3-on-surface-variant" />
+                <input
+                  type="text"
+                  placeholder="Search settings..."
+                  value={settingsSearchQuery}
+                  onChange={(e) => setSettingsSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-7 py-1.5 bg-m3-surface-low rounded-xl border border-m3-outline-variant/40 text-xs text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary font-sans transition-all"
+                />
+                {settingsSearchQuery && (
                   <button
-                    onClick={() => onThemeToggle && theme === "dark" && onThemeToggle()}
-                    className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
-                      theme === "light" ? "text-m3-primary font-extrabold" : "text-m3-on-surface-variant hover:text-m3-on-surface"
-                    }`}
+                    onClick={() => setSettingsSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded-full hover:bg-m3-surface-container text-m3-on-surface-variant cursor-pointer"
                   >
-                    <Sun size={14} className={theme === "light" ? "text-m3-primary" : ""} />
-                    <span>Light</span>
+                    <X size={12} />
                   </button>
-                  <button
-                    onClick={() => onThemeToggle && theme === "light" && onThemeToggle()}
-                    className={`relative z-10 flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${
-                      theme === "dark" ? "text-m3-primary font-extrabold" : "text-m3-on-surface-variant hover:text-m3-on-surface"
-                    }`}
-                  >
-                    <Moon size={14} className={theme === "dark" ? "text-m3-primary" : ""} />
-                    <span>Dark</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Animations Toggle Option */}
-              <div className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h4 className="text-xs font-bold text-m3-on-surface">Motion Animations</h4>
-                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">Enable smooth spring transitions and modal entry effects.</p>
-                </div>
-                <button
-                  onClick={() => handleSetAnimationsEnabled(!animationsEnabled)}
-                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
-                    animationsEnabled ? "bg-m3-primary" : "bg-m3-outline-variant"
-                  }`}
-                >
-                  <motion.div
-                    className="bg-white w-4 h-4 rounded-full shadow-md"
-                    animate={{ x: animationsEnabled ? 24 : 0 }}
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                  />
-                </button>
-              </div>
-
-              {/* Grid Density Option */}
-              <div className="p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h4 className="text-xs font-bold text-m3-on-surface">Grid Density &amp; Compact Mode</h4>
-                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">Display cards in a compact, higher-density grid layout.</p>
-                </div>
-                <button
-                  onClick={() => handleSetCompactMode(!compactMode)}
-                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer ${
-                    compactMode ? "bg-m3-primary" : "bg-m3-outline-variant"
-                  }`}
-                >
-                  <motion.div
-                    className="bg-white w-4 h-4 rounded-full shadow-md"
-                    animate={{ x: compactMode ? 24 : 0 }}
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                  />
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* ================= SECTION: DEVELOPER DIAGNOSTICS & OBSERVABILITY ================= */}
-          <section className="space-y-4 pt-6 border-t border-m3-outline-variant/30">
-            <div className="flex items-center justify-between pb-2 border-b border-m3-outline-variant/30">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary">
-                  <Terminal size={18} />
-                </div>
-                <div>
-                  <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider">
-                    Developer Diagnostics &amp; Observability
-                  </h2>
-                  <p className="text-[11px] text-m3-on-surface-variant">
-                    Real-time error tracking, background task monitoring, and storage operation telemetry.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={handleExportLogs}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-xl border border-m3-outline-variant text-m3-on-surface hover:bg-m3-surface-container flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Download size={13} />
-                  <span>Export JSON</span>
-                </button>
-                <button
-                  onClick={handleClearLogs}
-                  className="px-3 py-1.5 text-xs font-semibold rounded-xl bg-red-500/10 text-red-600 hover:bg-red-500/20 flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Trash2 size={13} />
-                  <span>Clear Logs</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Logger Status Bar & Stats */}
-            <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 space-y-4 shadow-xs">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <h4 className="text-xs font-bold text-m3-on-surface">Background Observability Engine</h4>
-                  <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-                    Actively monitors unhandled exceptions, unhandled promise rejections, main thread freezes, and slow storage operations.
-                  </p>
-                </div>
-                <button
-                  onClick={() => handleToggleLogging(!isLoggingActive)}
-                  className={`w-12 h-6 flex items-center rounded-full p-1 transition-colors cursor-pointer shrink-0 ${
-                    isLoggingActive ? "bg-m3-primary" : "bg-m3-outline-variant"
-                  }`}
-                >
-                  <motion.div
-                    className="bg-white w-4 h-4 rounded-full shadow-md"
-                    animate={{ x: isLoggingActive ? 24 : 0 }}
-                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                  />
-                </button>
-              </div>
-
-              {/* Stat Counters Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 pt-2">
-                <div className="bg-m3-surface p-3 rounded-xl border border-m3-outline-variant/20 text-center">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-m3-on-surface-variant">Total</span>
-                  <p className="text-base font-bold font-mono text-m3-on-surface mt-0.5">{logStats.total}</p>
-                </div>
-                <div className="bg-red-500/5 p-3 rounded-xl border border-red-500/20 text-center">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-red-600">Crashes</span>
-                  <p className="text-base font-bold font-mono text-red-600 mt-0.5">{logStats.crashes}</p>
-                </div>
-                <div className="bg-amber-500/5 p-3 rounded-xl border border-amber-500/20 text-center">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-amber-600">Freezes</span>
-                  <p className="text-base font-bold font-mono text-amber-600 mt-0.5">{logStats.freezes}</p>
-                </div>
-                <div className="bg-blue-500/5 p-3 rounded-xl border border-blue-500/20 text-center">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-blue-600">Slow Tasks</span>
-                  <p className="text-base font-bold font-mono text-blue-600 mt-0.5">{logStats.slowPerf}</p>
-                </div>
-                <div className="bg-purple-500/5 p-3 rounded-xl border border-purple-500/20 text-center">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-purple-600">Errors</span>
-                  <p className="text-base font-bold font-mono text-purple-600 mt-0.5">{logStats.errors}</p>
-                </div>
-                <div className="bg-emerald-500/5 p-3 rounded-xl border border-emerald-500/20 text-center">
-                  <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-600">Warnings</span>
-                  <p className="text-base font-bold font-mono text-emerald-600 mt-0.5">{logStats.warnings}</p>
-                </div>
-              </div>
-
-              {/* Filters & Search */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                <div className="relative flex-1">
-                  <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-m3-on-surface-variant" />
-                  <input
-                    type="text"
-                    placeholder="Search logs by title, message, stack..."
-                    value={logSearchText}
-                    onChange={(e) => setLogSearchText(e.target.value)}
-                    className="w-full pl-9 pr-4 py-2 bg-m3-surface rounded-xl border border-m3-outline-variant/30 text-xs text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary"
-                  />
-                </div>
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-                  {["all", "crash", "freeze", "slow_perf", "error", "warning", "info"].map((cat) => (
-                    <button
-                      key={cat}
-                      onClick={() => setLogFilterCategory(cat)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider shrink-0 cursor-pointer transition-colors ${
-                        logFilterCategory === cat
-                          ? "bg-m3-primary text-m3-on-primary"
-                          : "bg-m3-surface text-m3-on-surface-variant hover:text-m3-on-surface border border-m3-outline-variant/30"
-                      }`}
-                    >
-                      {cat.replace("_", " ")}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Logs Stream List */}
-              <div className="bg-m3-surface rounded-xl border border-m3-outline-variant/25 max-h-[400px] overflow-y-auto divide-y divide-m3-outline-variant/10 font-mono text-xs">
-                {filteredLogs.length === 0 ? (
-                  <div className="p-8 text-center text-m3-on-surface-variant font-sans text-xs">
-                    No log entries found matching criteria. System is running smoothly.
-                  </div>
-                ) : (
-                  filteredLogs.map((log) => {
-                    const isExpanded = expandedLogId === log.id;
-                    const dateStr = new Date(log.timestamp).toLocaleTimeString();
-                    let badgeColor = "bg-slate-500/10 text-slate-600 border-slate-500/20";
-                    if (log.category === "crash") badgeColor = "bg-red-500/10 text-red-600 border-red-500/20";
-                    else if (log.category === "freeze") badgeColor = "bg-amber-500/10 text-amber-600 border-amber-500/20";
-                    else if (log.category === "slow_perf") badgeColor = "bg-blue-500/10 text-blue-600 border-blue-500/20";
-                    else if (log.category === "error") badgeColor = "bg-purple-500/10 text-purple-600 border-purple-500/20";
-                    else if (log.category === "warning") badgeColor = "bg-orange-500/10 text-orange-600 border-orange-500/20";
-
-                    return (
-                      <div
-                        key={log.id}
-                        onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
-                        className="p-3.5 hover:bg-m3-surface-container/50 transition-colors cursor-pointer space-y-1.5"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2">
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${badgeColor}`}>
-                              {log.category.replace("_", " ")}
-                            </span>
-                            <span className="font-bold text-m3-on-surface font-sans">{log.title}</span>
-                          </div>
-                          <div className="flex items-center gap-2 text-m3-on-surface-variant text-[11px]">
-                            {log.durationMs && (
-                              <span className="text-blue-600 font-bold">{log.durationMs}ms</span>
-                            )}
-                            <span className="flex items-center gap-1">
-                              <Clock size={11} />
-                              {dateStr}
-                            </span>
-                          </div>
-                        </div>
-                        <p className="text-m3-on-surface-variant text-[11px] font-sans line-clamp-2">{log.message}</p>
-                        {isExpanded && (
-                          <div className="mt-2 pt-2 border-t border-m3-outline-variant/20 space-y-2 text-[11px]">
-                            {log.url && (
-                              <div>
-                                <span className="text-m3-outline">Path:</span> <span className="text-m3-on-surface">{log.url}</span>
-                              </div>
-                            )}
-                            {log.details && (
-                              <div>
-                                <span className="text-m3-outline">Details:</span>
-                                <pre className="mt-1 p-2 bg-m3-surface-container rounded-lg overflow-x-auto text-[10px] text-m3-on-surface">
-                                  {JSON.stringify(log.details, null, 2)}
-                                </pre>
-                              </div>
-                            )}
-                            {log.stack && (
-                              <div>
-                                <span className="text-m3-outline">Stack Trace:</span>
-                                <pre className="mt-1 p-2 bg-red-500/5 rounded-lg overflow-x-auto text-[10px] text-red-600">
-                                  {log.stack}
-                                </pre>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
                 )}
               </div>
+
+              {/* Quick Export Backup */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerVibration("light");
+                  exportData();
+                }}
+                className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-bold hover:bg-m3-primary/95 transition-all shadow-xs active:scale-95 cursor-pointer shrink-0"
+                title="Export JSON backup immediately"
+              >
+                <Download size={13} />
+                <span>Backup</span>
+              </button>
             </div>
-          </section>
+          </div>
 
+          {/* Tab Navigation Pill Bar */}
+          <nav
+            aria-label="Settings categories"
+            className="md:hidden px-4 md:px-6 flex items-center gap-1.5 overflow-x-auto no-scrollbar py-2 border-t border-m3-outline-variant/20 bg-m3-surface-low/50"
+          >
+            {tabsList.map((tab) => {
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    triggerVibration("light");
+                    setActiveTab(tab.id);
+                  }}
+                  className={`relative flex items-center gap-2 px-4 py-3 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer min-h-[44px] ${
+                    isActive
+                      ? "text-m3-primary bg-m3-surface border border-m3-primary/30 shadow-xs font-extrabold"
+                      : "text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-container/60 border border-transparent"
+                  }`}
+                >
+                  {tab.icon}
+                  <span>{tab.label}</span>
+                  {tab.badge !== undefined && (
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[9px] font-mono font-bold ${
+                        isActive
+                          ? "bg-m3-primary text-m3-on-primary"
+                          : "bg-m3-outline-variant/30 text-m3-on-surface-variant"
+                      }`}
+                    >
+                      {tab.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </nav>
+        </header>
 
+        {/* Main Settings Panel Split Wrapper */}
+        <div className="flex-1 flex flex-col md:flex-row min-h-0 h-full overflow-hidden">
+          {/* Desktop Left Sidebar: Vertical Navigation */}
+          <aside className="hidden md:flex flex-col w-[260px] border-r border-m3-outline-variant/40 bg-m3-surface-low/30 p-5 space-y-5 shrink-0 overflow-y-auto select-none">
+            {settingsCategories.map((cat) => (
+              <div key={cat.id} className="space-y-2">
+                <h2 className="px-2 text-[10px] uppercase tracking-wider font-extrabold text-m3-outline font-mono">
+                  {cat.title}
+                </h2>
+                <div className="flex flex-col gap-1">
+                  {cat.tabs.map((tab) => {
+                    const isActive = activeTab === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => {
+                          triggerVibration("light");
+                          setActiveTab(tab.id as SettingsTab);
+                        }}
+                        className={`group flex items-center justify-between w-full px-3 py-2 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer border ${
+                          isActive
+                            ? "bg-m3-primary-container border-m3-primary/25 text-m3-on-primary-container shadow-xs font-extrabold"
+                            : "bg-transparent border-transparent text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-container/60"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className={`transition-transform duration-200 group-hover:scale-110 ${isActive ? 'text-m3-on-primary-container' : 'text-m3-on-surface-variant'}`}>
+                            {tab.icon}
+                          </span>
+                          <span className="font-sans text-[11px]">{tab.label}</span>
+                        </div>
+                        {tab.badge !== undefined && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold whitespace-nowrap leading-none ${
+                              isActive
+                                ? "bg-m3-primary text-m3-on-primary"
+                                : "bg-m3-outline-variant/30 text-m3-on-surface-variant"
+                            }`}
+                          >
+                            {tab.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </aside>
 
+          {/* Scrollable Content Container (Desktop: Right Column) */}
+          <div className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-8 max-w-4xl w-full">
+            <AnimatePresence mode="wait">
+              <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.15 }}
+              className="space-y-6"
+            >
+              {/* TAB 0: OVERVIEW */}
+              {activeTab === "overview" && (
+                <div className="space-y-8">
+                  {/* Overview Header Banner */}
+                  <div className="p-5 rounded-[20px] bg-gradient-to-br from-m3-primary/5 via-transparent to-m3-primary/5 border border-m3-outline-variant/30 relative overflow-hidden select-none">
+                    <div className="absolute right-0 top-0 translate-x-12 -translate-y-12 w-48 h-48 bg-m3-primary/5 rounded-full blur-2xl" />
+                    <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider flex items-center gap-2">
+                      <Sparkles size={14} className="text-m3-primary animate-pulse" />
+                      Instasorter Dashboard Control
+                    </h2>
+                    <p className="text-[11px] text-m3-on-surface-variant font-sans mt-1 max-w-2xl leading-relaxed">
+                      Welcome to your system settings. This dashboard offers a tiered overview of your curator identity, browser caching, scrapers, and telemetry. Use the cards below to configure your installation or check real-time system health.
+                    </p>
+                  </div>
+
+                  {/* Tiered Grid Categories */}
+                  {settingsCategories.map((category) => (
+                    <div key={category.id} className="space-y-4">
+                      {/* Category Header */}
+                      <div className="border-b border-m3-outline-variant/30 pb-2">
+                        <h3 className="text-[11px] font-extrabold text-m3-primary uppercase tracking-widest font-mono flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-m3-primary" />
+                          {category.id === "general" ? "I. General / Curation" : category.id === "data" ? "II. Data & Scraping" : "III. System Diagnostics"}
+                        </h3>
+                        <p className="text-[10px] text-m3-on-surface-variant mt-0.5">
+                          {category.id === "general" 
+                            ? "Configure your personal curator profile, user preferences, look-and-feel, and access tools."
+                            : category.id === "data"
+                            ? "Inspect local IndexedDB quotas, edit Instagram scrapers, export backups, or normalize library tags."
+                            : "Track active main thread execution logs, examine observabilities, and debug engine test probes."}
+                        </p>
+                      </div>
+
+                      {/* Card Grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                        {category.tabs
+                          .filter((tab) => tab.id !== "overview") // skip overview itself in the grid
+                          .map((tab) => {
+                            return (
+                              <div
+                                key={tab.id}
+                                className="group flex flex-col justify-between p-5 bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] transition-all duration-300 hover:scale-[1.01] hover:border-m3-primary/20 hover:shadow-xs select-none"
+                              >
+                                <div>
+                                  {/* Title & Icon Header */}
+                                  <div className="flex items-center justify-between mb-3.5">
+                                    <div className="flex items-center gap-3">
+                                      <div className="p-2.5 rounded-xl bg-m3-primary/5 text-m3-primary border border-m3-outline-variant/20 transition-colors group-hover:bg-m3-primary/10">
+                                        {tab.icon}
+                                      </div>
+                                      <h4 className="text-xs font-bold font-display text-m3-on-surface tracking-wide">
+                                        {tab.label}
+                                      </h4>
+                                    </div>
+                                    {tab.badge !== undefined && (
+                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold bg-m3-outline-variant/30 text-m3-on-surface-variant whitespace-nowrap">
+                                        {tab.badge}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Descriptive Subtext */}
+                                  <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mb-4">
+                                    {tab.id === "profile" && "Manage display name, Instagram handle, curator email, and sync with your local metadata tracker."}
+                                    {tab.id === "preferences" && "Customize visual styling, dark room theme, compact list view, animations, and background media processing."}
+                                    {tab.id === "shortcuts" && "Quick reference list of available hotkeys for fluid, ultra-high-efficiency mouse-free media curation."}
+                                    {tab.id === "maintenance" && "Inspect local IndexedDB disk usage, run index checking, normalize hashtag casings, or redownload missing thumbnails."}
+                                    {tab.id === "scraper" && "Configure login keys, proxy servers, and SOCKS5 endpoints. Execute test probes against the Instaloader bridge."}
+                                    {tab.id === "backup" && "Export your library into secure JSON or standard CSV backups. Erase cache or perform structural data wipes."}
+                                    {tab.id === "telemetry" && "Real-time diagnostic traces, thread locks tracker, API health observability, and logs export."}
+                                  </p>
+
+                                  {/* Dynamic Inline Statuses & Mini-Toggles */}
+                                  <div className="py-2.5 px-3 bg-m3-surface/40 rounded-xl border border-m3-outline-variant/15 text-[10px] space-y-2 mb-4 font-sans text-m3-on-surface-variant">
+                                    {tab.id === "profile" && (
+                                      <div className="space-y-1.5 font-mono">
+                                        <div className="flex items-center justify-between">
+                                          <span>Curator:</span>
+                                          <span className="font-bold text-m3-on-surface truncate max-w-[120px]">{displayName}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span>Username:</span>
+                                          <span className="text-m3-primary">@{username || "none"}</span>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {tab.id === "preferences" && (
+                                      <div className="space-y-2">
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-mono">Dark Room Theme:</span>
+                                          <UnifiedSwitch
+                                            checked={theme === "dark"}
+                                            onChange={onThemeToggle || (() => {})}
+                                            ariaLabel="Toggle dark mode theme"
+                                          />
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-mono">Compact Mode:</span>
+                                          <UnifiedSwitch
+                                            checked={compactMode}
+                                            onChange={handleSetCompactMode}
+                                            ariaLabel="Toggle compact layout"
+                                          />
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-mono">UI Animations:</span>
+                                          <UnifiedSwitch
+                                            checked={animationsEnabled}
+                                            onChange={handleSetAnimationsEnabled}
+                                            ariaLabel="Toggle UI motion physics"
+                                          />
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span className="font-mono">Background Organizer:</span>
+                                          <UnifiedSwitch
+                                            checked={isBackgroundOrganizerEnabled}
+                                            onChange={setIsBackgroundOrganizerEnabled}
+                                            ariaLabel="Toggle background categorizer worker"
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {tab.id === "shortcuts" && (
+                                      <div className="space-y-1.5 font-mono">
+                                        <div className="flex items-center justify-between">
+                                          <span>Go to Home:</span>
+                                          <kbd className="px-1.5 py-0.5 rounded-md bg-m3-surface-container border border-m3-outline-variant/45 text-[9px] font-extrabold text-m3-on-surface">1</kbd>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span>Open Shortcuts:</span>
+                                          <kbd className="px-1.5 py-0.5 rounded-md bg-m3-surface-container border border-m3-outline-variant/45 text-[9px] font-extrabold text-m3-on-surface">?</kbd>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span>Focus Post:</span>
+                                          <kbd className="px-1.5 py-0.5 rounded-md bg-m3-surface-container border border-m3-outline-variant/45 text-[9px] font-extrabold text-m3-on-surface">J / K</kbd>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {tab.id === "maintenance" && (
+                                      <div className="space-y-1.5 font-mono">
+                                        <div className="flex items-center justify-between">
+                                          <span>IndexedDB Quota:</span>
+                                          <span className="font-bold text-m3-on-surface">
+                                            {storageInfo 
+                                              ? `${(storageInfo.usage / (1024 * 1024)).toFixed(1)}MB of ${(storageInfo.quota / (1024 * 1024 * 1024)).toFixed(0)}GB`
+                                              : "Checking..."}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span>Library Size:</span>
+                                          <span className="font-bold text-m3-primary">{posts.length} saved posts</span>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span>Thumbnails Queue:</span>
+                                          <span className="text-[9px] bg-m3-outline-variant/30 text-m3-on-surface px-1.5 py-0.2 rounded-full font-bold">
+                                            {workerStats.pending} pending
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {tab.id === "scraper" && (
+                                      <div className="space-y-1.5 font-mono">
+                                        <div className="flex items-center justify-between">
+                                          <span>Instaloader Auth:</span>
+                                          <span className={`font-bold ${scrapingUser ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600"}`}>
+                                            {scrapingUser ? scrapingUser : "Anonymous"}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span>Proxy Server:</span>
+                                          <span className="truncate max-w-[140px]" title={scrapingProxy}>
+                                            {scrapingProxy ? scrapingProxy : "Direct Connection"}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {tab.id === "backup" && (
+                                      <div className="flex flex-col gap-1.5 py-0.5">
+                                        <div className="flex gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              triggerVibration("light");
+                                              exportData();
+                                            }}
+                                            className="flex-1 py-1 px-2 bg-m3-surface border border-m3-outline-variant/50 hover:bg-m3-surface-variant/20 rounded-lg text-[9px] font-bold text-m3-on-surface cursor-pointer select-none text-center whitespace-nowrap"
+                                          >
+                                            Export JSON
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              triggerVibration("light");
+                                              exportCSVData();
+                                            }}
+                                            className="flex-1 py-1 px-2 bg-m3-surface border border-m3-outline-variant/50 hover:bg-m3-surface-variant/20 rounded-lg text-[9px] font-bold text-m3-on-surface cursor-pointer select-none text-center whitespace-nowrap"
+                                          >
+                                            Export CSV
+                                          </button>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {tab.id === "telemetry" && (
+                                      <div className="space-y-1.5 font-mono">
+                                        <div className="flex items-center justify-between">
+                                          <span>Live Diagnostic:</span>
+                                          <button
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleToggleLogging(!isLoggingActive);
+                                            }}
+                                            className={`px-2 py-0.5 rounded-full text-[9px] font-bold cursor-pointer select-none whitespace-nowrap border ${
+                                              isLoggingActive 
+                                                ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:border-emerald-900 dark:text-emerald-300"
+                                                : "bg-stone-50 border-stone-200 text-stone-500 dark:bg-stone-900/30 dark:border-stone-800 dark:text-stone-400"
+                                            }`}
+                                          >
+                                            {isLoggingActive ? "Active" : "Disabled"}
+                                          </button>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                          <span>Total Traces:</span>
+                                          <span>{logStats.total} traces</span>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Navigate / Config Footer Button */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    triggerVibration("light");
+                                    setActiveTab(tab.id as SettingsTab);
+                                  }}
+                                  className="w-full py-2 bg-m3-primary hover:bg-m3-primary/95 text-m3-on-primary font-bold text-[10px] rounded-xl transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap"
+                                >
+                                  <span>Configure {tab.label}</span>
+                                  <ChevronRight size={10} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* TAB 1: CURATOR PROFILE */}
+              {activeTab === "profile" && (
+                <section className="space-y-4">
+                  <SettingSectionHeader
+                    icon={<User size={18} />}
+                    title="Account & Curator Profile"
+                    subtitle="Display name, Instagram handle, email credentials, and library metrics."
+                  />
+                  <ProfileTab
+                    displayName={displayName}
+                    setDisplayName={setDisplayName}
+                    username={username}
+                    setUsername={setUsername}
+                    email={email}
+                    setEmail={setEmail}
+                    avatarUrl={avatarUrl}
+                    onAvatarUpload={handleAvatarUpload}
+                    onRemoveAvatar={handleRemoveAvatar}
+                    isEditing={isEditing}
+                    setIsEditing={setIsEditing}
+                    avatarInputRef={avatarInputRef}
+                    postsCount={posts.length}
+                    onSaveProfile={handleSaveProfile}
+                  />
+                </section>
+              )}
+
+              {/* TAB 2: PREFERENCES */}
+              {activeTab === "preferences" && (
+                <section className="space-y-4">
+                  <SettingSectionHeader
+                    icon={<Sliders size={18} />}
+                    title="Primary App Preferences"
+                    subtitle="Essential toggleable controls for visual theme, grid density, animation physics, and background workers."
+                  />
+                  <PreferencesTab
+                    theme={theme}
+                    onThemeToggle={onThemeToggle}
+                    animationsEnabled={animationsEnabled}
+                    onSetAnimationsEnabled={handleSetAnimationsEnabled}
+                    compactMode={compactMode}
+                    onSetCompactMode={handleSetCompactMode}
+                    isBackgroundOrganizerEnabled={isBackgroundOrganizerEnabled}
+                    setIsBackgroundOrganizerEnabled={setIsBackgroundOrganizerEnabled}
+                    backgroundOrganizerStatus={backgroundOrganizerStatus}
+                    backgroundOrganizerProgress={backgroundOrganizerProgress}
+                  />
+                </section>
+              )}
+
+              {/* TAB 3: KEYBOARD SHORTCUTS */}
+              {activeTab === "shortcuts" && (
+                <section className="space-y-4">
+                  <SettingSectionHeader
+                    icon={<Keyboard size={18} />}
+                    title="Keyboard Shortcuts Cheatsheet"
+                    subtitle="Interactive reference for all single-key navigation, post curation, and overlay hotkeys."
+                  />
+                  <KeyboardShortcutsTab />
+                </section>
+              )}
+
+              {/* TAB 4: STORAGE & MAINTENANCE */}
+              {activeTab === "maintenance" && (
+                <section className="space-y-4">
+                  <SettingSectionHeader
+                    icon={<Database size={18} />}
+                    title="Storage, Caching & Maintenance"
+                    subtitle="Inspect browser IndexedDB quota, thumbnail worker status, duplicate items, and tag normalization."
+                  />
+                  <MaintenanceTab
+                    storageInfo={storageInfo}
+                    postsCount={posts.length}
+                    isRefreshingLibrary={isRefreshingLibrary}
+                    onRefreshLibrary={handleRefreshLibrary}
+                    onScanDuplicates={handleAnalyzeDuplicates}
+                    onConsolidateTags={handleConsolidateTags}
+                    workerStats={workerStats}
+                    isDownloading={isDownloading}
+                    onRetryFailedThumbnails={retryFailedThumbnails}
+                  />
+                </section>
+              )}
+
+              {/* TAB 5: SCRAPER CONFIG */}
+              {activeTab === "scraper" && (
+                <section className="space-y-4">
+                  <SettingSectionHeader
+                    icon={<Cpu size={18} />}
+                    title="Instagram Scraper Credentials & Proxies"
+                    subtitle="Account credentials, session cookies, SOCKS5 proxies, and engine test probes."
+                  />
+                  <ScraperTab
+                    scrapingUser={scrapingUser}
+                    setScrapingUser={setScrapingUser}
+                    scrapingPass={scrapingPass}
+                    setScrapingPass={setScrapingPass}
+                    scrapingSession={scrapingSession}
+                    setScrapingSession={setScrapingSession}
+                    scrapingProxy={scrapingProxy}
+                    setScrapingProxy={setScrapingProxy}
+                    loadingConfig={loadingConfig}
+                    savingConfig={savingConfig}
+                    onSaveConfig={handleSaveScrapingConfig}
+                    throttleStatus={throttleStatus}
+                    testingInstaloader={testingInstaloader}
+                    onTestInstaloader={handleTestInstaloader}
+                    instaloaderResult={instaloaderResult}
+                    testingMediaScraper={testingMediaScraper}
+                    onTestMediaScraper={handleTestMediaScraper}
+                    mediaScraperResult={mediaScraperResult}
+                  />
+                </section>
+              )}
+
+              {/* TAB 6: BACKUP & RESET */}
+              {activeTab === "backup" && (
+                <section className="space-y-4">
+                  <SettingSectionHeader
+                    icon={<Layers size={18} />}
+                    title="Backup, Data Export & Reset Library"
+                    subtitle="Export database backups in JSON or CSV spreadsheets, or clear local storage."
+                  />
+                  <BackupTab
+                    postsCount={posts.length}
+                    onExportJSON={exportData}
+                    onExportCSV={exportCSVData}
+                    onShowConfirmClear={() => setShowConfirmClear(true)}
+                    onShowConfirmClearAll={() => setShowConfirmClearAll(true)}
+                  />
+                </section>
+              )}
+
+              {/* TAB 7: TELEMETRY & LOGS */}
+              {activeTab === "telemetry" && (
+                <section className="space-y-4">
+                  <SettingSectionHeader
+                    icon={<Terminal size={18} />}
+                    title="Developer Diagnostics & Observability Logs"
+                    subtitle="Live telemetry tracking, main thread freezes, storage logs, and log export tools."
+                  />
+                  <TelemetryTab
+                    isLoggingActive={isLoggingActive}
+                    onToggleLogging={handleToggleLogging}
+                    logs={logs}
+                    logStats={{ ...logStats, info: logs.filter(l => l.category === "info").length }}
+                    logSearchText={logSearchText}
+                    setLogSearchText={setLogSearchText}
+                    logFilterCategory={logFilterCategory}
+                    setLogFilterCategory={setLogFilterCategory}
+                    filteredLogs={filteredLogs}
+                    expandedLogId={expandedLogId}
+                    setExpandedLogId={setExpandedLogId}
+                    onExportLogs={handleExportLogs}
+                    onClearLogs={handleClearLogs}
+                  />
+                </section>
+              )}
+            </motion.div>
+          </AnimatePresence>
         </div>
+      </div>
+
+
 
         {/* Confirmation Modal for Clearing Database */}
         <AnimatePresence>
@@ -1592,5 +1516,5 @@ export const SettingsView = React.memo(
         </AnimatePresence>
       </div>
     );
-  },
+  }
 );

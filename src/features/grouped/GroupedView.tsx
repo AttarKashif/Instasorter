@@ -324,7 +324,7 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
         : null;
     }, [detailPost, storePosts]);
 
-    // Sync selected group to localStorage
+    // Sync selected group to localStorage and notify shell breadcrumb
     useEffect(() => {
       try {
         if (selectedGroup) {
@@ -335,10 +335,21 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
         } else {
           localStorage.removeItem("grouped_selected_group");
         }
+        window.dispatchEvent(new CustomEvent("grouped_selected_group_changed"));
       } catch (e) {
         console.error("Failed to save selectedGroup to localStorage", e);
       }
     }, [selectedGroup]);
+
+    useEffect(() => {
+      const handleClear = () => {
+        setSelectedGroup(null);
+      };
+      window.addEventListener("clear_grouped_selected_group", handleClear);
+      return () => {
+        window.removeEventListener("clear_grouped_selected_group", handleClear);
+      };
+    }, []);
 
     // Sync group filter type to localStorage
     useEffect(() => {
