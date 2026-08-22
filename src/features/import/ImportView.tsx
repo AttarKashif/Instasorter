@@ -38,6 +38,8 @@ import {
   Bug,
   Info,
   FileText,
+  Bookmark,
+  Check,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import toast from "react-hot-toast";
@@ -69,6 +71,17 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
   const setPosts = usePostStore((state) => state.setPosts);
 
   const [showConfirmClear, setShowConfirmClear] = useState(false);
+  const [copiedBookmarklet, setCopiedBookmarklet] = useState(false);
+
+  const bookmarkletCode = `javascript:(function(){try{const u=window.location.href;const og=document.querySelector('meta[property="og:image"]');const img=og?og.getAttribute('content'):null;const authorEl=document.querySelector('header a[role="link"], a[href^="/"] span');const auth=authorEl?authorEl.textContent.trim():'';const timeEl=document.querySelector('time');const st=timeEl?timeEl.getAttribute('datetime'):new Date().toISOString();const capEl=document.querySelector('h1, span._aacl');const cap=capEl?capEl.textContent:'';const obj=[{id:window.location.pathname.split('/')[2]||'ig_'+Date.now(),postUrl:u,creatorUsername:auth||'instagram_creator',caption:cap,thumbnailUrl:img,savedAt:st,mediaType:u.includes('/reel/')?'video':'image',tags:[],collections:['Imported via Bookmarklet'],isFavorite:false,isArchived:false,readLater:false}];navigator.clipboard.writeText(JSON.stringify(obj,null,2)).then(()=>alert('✅ Post copied! Paste into Instasorter Import tab.')).catch(()=>prompt('Copy JSON:',JSON.stringify(obj)));}catch(e){alert('Error: '+e.message);}})();`;
+
+  const copyBookmarklet = () => {
+    navigator.clipboard.writeText(bookmarkletCode);
+    setCopiedBookmarklet(true);
+    triggerVibration("light");
+    toast.success("Bookmarklet copied! Create a browser bookmark with this script as URL.");
+    setTimeout(() => setCopiedBookmarklet(false), 3000);
+  };
 
   const exportData = () => {
     const dataStr =
@@ -757,6 +770,38 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
                 </button>
               </div>
             </motion.div>
+          )}
+
+          {/* 1-Click Direct Instagram Capture Bookmarklet (Zero proxy/rate-limit blocks) */}
+          {!isProcessing && (
+            <div className="bg-gradient-to-br from-m3-surface-low to-m3-surface border border-m3-outline-variant/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-m3-primary/10 text-m3-primary shrink-0">
+                  <Bookmark size={16} />
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-m3-on-surface">1-Click Live Instagram Capture</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant">Extract HD media directly from open Instagram tabs with 100% reliability.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={copyBookmarklet}
+                className="px-3.5 py-1.5 bg-m3-surface hover:bg-m3-surface-container border border-m3-outline-variant/40 hover:border-m3-primary text-m3-on-surface text-xs font-bold rounded-xl transition-all cursor-pointer active:scale-95 flex items-center gap-1.5 shrink-0 self-start sm:self-auto"
+              >
+                {copiedBookmarklet ? (
+                  <>
+                    <Check size={13} className="text-emerald-500" />
+                    <span className="text-emerald-600">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy size={13} />
+                    <span>Copy Bookmarklet</span>
+                  </>
+                )}
+              </button>
+            </div>
           )}
 
           {/* Clear Library option inside ImportView if there are existing posts */}

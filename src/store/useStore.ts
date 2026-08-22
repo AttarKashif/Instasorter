@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { Post, Collection, SmartRule } from "../types/post";
 import { db } from "../lib/db";
-import { FullTextSearchIndex, buildSearchIndex, querySearchIndex } from "../lib/searchIndex";
+import { FullTextSearchIndex, buildSearchIndex, querySearchIndex, updatePostInIndex } from "../lib/searchIndex";
 
 interface PostState {
   posts: Post[];
@@ -155,7 +155,8 @@ export const usePostStore = create<PostState>((set, get) => ({
         collections: Array.from(collections),
       };
       const nextPosts = [...state.posts, lightweightPost];
-      return { posts: nextPosts, searchIndex: buildSearchIndex(nextPosts) };
+      const updatedIndex = updatePostInIndex(state.searchIndex, lightweightPost, false);
+      return { posts: nextPosts, searchIndex: updatedIndex };
     }),
   toggleFavorite: (id) =>
     set((state) => ({
@@ -165,13 +166,18 @@ export const usePostStore = create<PostState>((set, get) => ({
     })),
   updatePost: (id, updates) =>
     set((state) => {
+      let targetPost: Post | undefined;
       const nextPosts = state.posts.map((p) => {
         if (p.id === id) {
-          return { ...p, ...updates };
+          targetPost = { ...p, ...updates };
+          return targetPost;
         }
         return p;
       });
-      return { posts: nextPosts, searchIndex: buildSearchIndex(nextPosts) };
+      const updatedIndex = targetPost
+        ? updatePostInIndex(state.searchIndex, targetPost, false)
+        : state.searchIndex;
+      return { posts: nextPosts, searchIndex: updatedIndex };
     }),
   addSmartRule: (rule) =>
     set((state) => {

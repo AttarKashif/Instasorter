@@ -82,7 +82,6 @@ export const PostCard = React.memo(
   }: PostCardProps) => {
     const t = VOCABULARY.postcard;
     const updatePost = usePostStore((state) => state.updatePost);
-    const posts = usePostStore((state) => state.posts);
     const toggleFavorite = usePostStore((state) => state.toggleFavorite);
     const searchQuery = usePostStore((state) => state.searchQuery);
 
@@ -385,12 +384,19 @@ export const PostCard = React.memo(
       }, 2000);
     };
 
-    // Fetch unique existing collections from all posts to populate auto-suggestions
-    const allCollections = useMemo(() => {
-      return Array.from(
-        new Set(posts.flatMap((p) => p.collections || [])),
-      ).filter(Boolean);
-    }, [posts]);
+    // Fetch unique existing collections on demand to populate auto-suggestions
+    const [existingCollections, setExistingCollections] = useState<string[]>([]);
+    
+    useEffect(() => {
+      if (showColDropdown) {
+        const uniqueCols = Array.from(
+          new Set(usePostStore.getState().posts.flatMap((p) => p.collections || [])),
+        ).filter(Boolean);
+        setExistingCollections(uniqueCols);
+      }
+    }, [showColDropdown]);
+
+    const allCollections = existingCollections;
 
     // Add / Remove Tags
     const handleAddTagSubmit = async (e: React.FormEvent) => {

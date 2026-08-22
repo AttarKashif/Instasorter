@@ -878,41 +878,53 @@ export const DashboardView = React.memo(
       [],
     );
 
-    // Derive unique tags / collections / formats for filtering
-    const allTags = useMemo(
-      () => Array.from(new Set(posts.flatMap((p) => p.tags || []))),
-      [posts],
-    );
-    const allCollections = useMemo(
-      () => Array.from(new Set(posts.flatMap((p) => p.collections || []))),
-      [posts],
-    );
-    const allMediaTypes = useMemo(
-      () => Array.from(new Set(posts.map((p) => p.mediaType || "image"))),
-      [posts],
-    );
-
-    const collectionCounts = useMemo(() => {
+    // Derive unique tags / collections / formats for filtering in a single O(N) pass
+    const { allTags, allCollections, allMediaTypes, collectionCounts, collectionsList } = useMemo(() => {
+      const tagSet = new Set<string>();
+      const colMap = new Map<string, Post[]>();
+      const mediaSet = new Set<string>();
       const counts: Record<string, number> = {};
-      posts.forEach((p) => {
-        (p.collections || []).forEach((c) => {
-          counts[c] = (counts[c] || 0) + 1;
-        });
-      });
-      return counts;
+
+      for (let i = 0; i < posts.length; i++) {
+        const p = posts[i];
+        mediaSet.add(p.mediaType || "image");
+
+        if (p.tags) {
+          for (let j = 0; j < p.tags.length; j++) {
+            tagSet.add(p.tags[j]);
+          }
+        }
+
+        if (p.collections) {
+          for (let j = 0; j < p.collections.length; j++) {
+            const col = p.collections[j];
+            counts[col] = (counts[col] || 0) + 1;
+            let list = colMap.get(col);
+            if (!list) {
+              list = [];
+              colMap.set(col, list);
+            }
+            list.push(p);
+          }
+        }
+      }
+
+      const colNames = Array.from(colMap.keys());
+      const colList = colNames.map((name) => ({
+        name,
+        posts: colMap.get(name) || [],
+      }));
+
+      return {
+        allTags: Array.from(tagSet),
+        allCollections: colNames,
+        allMediaTypes: Array.from(mediaSet),
+        collectionCounts: counts,
+        collectionsList: colList,
+      };
     }, [posts]);
 
     const pinnedCollections = usePostStore((state) => state.pinnedCollections);
-
-    const collectionsList = useMemo(() => {
-      return allCollections.map((name) => {
-        const colPosts = posts.filter((p) => (p.collections || []).includes(name));
-        return {
-          name,
-          posts: colPosts,
-        };
-      });
-    }, [allCollections, posts]);
 
     const sortedCollections = useMemo(() => {
       let result = [...collectionsList];
@@ -971,22 +983,21 @@ export const DashboardView = React.memo(
       );
     }, [allCollections, deferredCollectionSearchQuery]);
 
-    // Fuse search
-    const fuse = useMemo(
-      () =>
-        new Fuse(posts, {
-          keys: [
-            "caption",
-            "creatorUsername",
-            "notes",
-            "hashtags",
-            "tags",
-            "collections",
-          ],
-          threshold: 0.3,
-        }),
-      [posts],
-    );
+    // Fuse search (lazily constructed only when searching)
+    const fuse = useMemo(() => {
+      if (!deferredSearchQuery) return null;
+      return new Fuse(posts, {
+        keys: [
+          "caption",
+          "creatorUsername",
+          "notes",
+          "hashtags",
+          "tags",
+          "collections",
+        ],
+        threshold: 0.3,
+      });
+    }, [posts, deferredSearchQuery]);
 
     // Main filter/sort computation
     const filteredPosts = useMemo(() => {
@@ -1079,78 +1090,58 @@ export const DashboardView = React.memo(
           }
 
           // Fallback to fuzzy search if no exact, synonym, or indexed matches found
-          if (result.length === 0) {
+          if (result.length === 0 && fuse) {
             result = fuse.search(deferredSearchQuery).map((r) => r.item);
           }
         }
       }
 
-      if (filterFavoriteOnly) {
-        result = result.filter((p) => p.isFavorite);
-      }
+      const parsedDates = {
+        start: startDate ? new Date(startDate).getTime() : null,
+        end: endDate ? new Date(endDate).getTime() : null,
+      };
 
-      if (filterArchived === "active") {
-        result = result.filter((p) => !p.isArchived);
-      } else if (filterArchived === "archived") {
-        result = result.filter((p) => p.isArchived);
-      }
+      const creatorLower = deferredCreatorFilter ? deferredCreatorFilter.toLowerCase() : null;
 
-      if (filterMediaType !== "all") {
-        result = result.filter(
-          (p) => (p.mediaType || "image") === filterMediaType,
-        );
-      }
+      // High-performance single-pass multi-criteria filter
+      result = result.filter((p) => {
+        if (filterFavoriteOnly && !p.isFavorite) return false;
+        if (filterArchived === "active" && p.isArchived) return false;
+        if (filterArchived === "archived" && !p.isArchived) return false;
+        if (filterMediaType !== "all" && (p.mediaType || "image") !== filterMediaType) return false;
+        if (filterHasNotes && (!p.notes || p.notes.trim().length === 0)) return false;
+        if (filterHasLocation && (!p.location || p.location.trim().length === 0)) return false;
+        if (filterHasHashtags && (!p.hashtags || p.hashtags.length === 0)) return false;
 
-      if (filterHasNotes) {
-        result = result.filter((p) => p.notes && p.notes.trim().length > 0);
-      }
+        if (parsedDates.start !== null || parsedDates.end !== null) {
+          const postTime = p.savedAt ? new Date(p.savedAt).getTime() : 0;
+          if (parsedDates.start !== null && postTime < parsedDates.start) return false;
+          if (parsedDates.end !== null && postTime > parsedDates.end) return false;
+        }
 
-      if (filterHasLocation) {
-        result = result.filter(
-          (p) => p.location && p.location.trim().length > 0,
-        );
-      }
+        if (selectedTags.length > 0) {
+          const pTags = p.tags || [];
+          for (let i = 0; i < selectedTags.length; i++) {
+            if (!pTags.includes(selectedTags[i])) return false;
+          }
+        }
 
-      if (filterHasHashtags) {
-        result = result.filter((p) => p.hashtags && p.hashtags.length > 0);
-      }
+        if (selectedCollections.length > 0) {
+          const pCols = p.collections || [];
+          for (let i = 0; i < selectedCollections.length; i++) {
+            if (!pCols.includes(selectedCollections[i])) return false;
+          }
+        }
 
-      if (startDate) {
-        result = result.filter(
-          (p) => p.savedAt && new Date(p.savedAt) >= new Date(startDate),
-        );
-      }
-      if (endDate) {
-        result = result.filter(
-          (p) => p.savedAt && new Date(p.savedAt) <= new Date(endDate),
-        );
-      }
+        if (creatorLower && !(p.creatorUsername || "").toLowerCase().includes(creatorLower)) {
+          return false;
+        }
 
-      if (selectedTags.length > 0) {
-        result = result.filter((p) =>
-          selectedTags.every((t) => (p.tags || []).includes(t)),
-        );
-      }
+        if (visibilityFilter === "visible" && p.visibility === "hidden") return false;
+        if (visibilityFilter === "hidden" && p.visibility !== "hidden") return false;
 
-      if (selectedCollections.length > 0) {
-        result = result.filter((p) =>
-          selectedCollections.every((c) => (p.collections || []).includes(c)),
-        );
-      }
-
-      if (deferredCreatorFilter) {
-        result = result.filter((p) =>
-          (p.creatorUsername || "")
-            .toLowerCase()
-            .includes(deferredCreatorFilter.toLowerCase()),
-        );
-      }
-
-      if (visibilityFilter === "visible") {
-        result = result.filter((p) => p.visibility !== "hidden");
-      } else if (visibilityFilter === "hidden") {
-        result = result.filter((p) => p.visibility === "hidden");
-      }
+        return true;
+      });
 
       const sorted = [...result];
       sorted.sort((a, b) => {
@@ -1374,12 +1365,18 @@ export const DashboardView = React.memo(
       visiblePosts.length
     ]);
 
-    // Library Stats Storage Estimation (JSON serialized posts representation in IndexedDB)
+    // Library Stats Storage Estimation (Approximated lightweight representation without full serialization)
     const formattedPayloadSize = useMemo(() => {
       if (!posts || posts.length === 0) return "0 B";
       try {
-        const jsonString = JSON.stringify(posts);
-        const bytes = jsonString.length;
+        // Average post JSON metadata footprint is ~850 bytes
+        const sampleSize = Math.min(posts.length, 10);
+        let sampleBytes = 0;
+        for (let i = 0; i < sampleSize; i++) {
+          sampleBytes += JSON.stringify(posts[i]).length;
+        }
+        const avgPerPost = sampleBytes / sampleSize;
+        const bytes = Math.round(avgPerPost * posts.length);
         if (bytes < 1024) return `${bytes} B`;
         const kb = bytes / 1024;
         if (kb < 1024) return `${kb.toFixed(1)} KB`;
@@ -1389,7 +1386,7 @@ export const DashboardView = React.memo(
         console.error("Payload size estimation error:", e);
         return "N/A";
       }
-    }, [posts]);
+    }, [posts.length]);
 
     // Estimated disk storage usage from browser navigator API
     const [browserStorage, setBrowserStorage] = useState<{ usage: number; quota: number } | null>(null);

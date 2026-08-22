@@ -192,23 +192,31 @@ async function runAhmedRangelScraper(shortcode: string): Promise<any> {
   return { success: false, error: "ahmedrangel/instagram-media-scraper pipeline found no media." };
 }
 
-// Lazy-loaded Gemini client
+// Lazy-loaded Gemini client with validity tracking
 let aiClient: GoogleGenAI | null = null;
+let isGeminiKeyValid: boolean | null = null;
 
-function getAiClient(): GoogleGenAI {
+function getAiClient(): GoogleGenAI | null {
+  if (isGeminiKeyValid === false) return null;
   const key = process.env.GEMINI_API_KEY;
   if (!key || key.trim() === "" || key.includes("placeholder") || !key.startsWith("AIza") || key.length < 30) {
-    throw new Error("GEMINI_API_KEY is not configured with a valid API key (must start with AIza).");
+    isGeminiKeyValid = false;
+    return null;
   }
   if (!aiClient) {
-    aiClient = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
+    try {
+      aiClient = new GoogleGenAI({
+        apiKey: key,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
         }
-      }
-    });
+      });
+    } catch {
+      isGeminiKeyValid = false;
+      return null;
+    }
   }
   return aiClient;
 }
@@ -611,34 +619,38 @@ async function scrapeInstagramImage(postUrl: string, postId: string, force: bool
   const scrapePromise = scrapeInstagramImageInternal(postUrl, postId, force, mediaType)
     .then(async (result) => {
       if (result.success) {
-        // Intercept and auto-generate caption via Gemini if missing and API key is configured
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (result.path && (!result.caption || result.caption.trim() === "") && apiKey && apiKey.startsWith("AIza") && apiKey.length >= 30) {
-          try {
-            const absoluteFilePath = path.join(process.cwd(), result.path.replace(/^\//, ''));
-            if (fs.existsSync(absoluteFilePath) && !absoluteFilePath.endsWith('.svg')) {
-              console.log(`[Thumbnail Scraper] [Gemini Vision Fallback] Post ${postId} has no caption. Attempting auto-generation...`);
-              const fileBuffer = await fs.promises.readFile(absoluteFilePath);
-              if (fileBuffer && fileBuffer.length > 0) {
-                const base64Data = fileBuffer.toString('base64');
-                const ai = getAiClient();
-                const genRes = await ai.models.generateContent({
-                  model: "gemini-2.5-flash",
-                  contents: {
-                    parts: [
-                      { inlineData: { mimeType: "image/jpeg", data: base64Data } },
-                      { text: "This is an Instagram post. Analyze this image and generate a realistic, high-fidelity descriptive caption (written in the natural voice of an Instagram creator) along with 5-10 relevant hashtags. Do not include any conversational fluff or meta-text." }
-                    ]
+        // Intercept and auto-generate caption via Gemini if missing and API key is valid
+        if (result.path && (!result.caption || result.caption.trim() === "") && isGeminiKeyValid !== false) {
+          const ai = getAiClient();
+          if (ai) {
+            try {
+              const absoluteFilePath = path.join(process.cwd(), result.path.replace(/^\//, ''));
+              if (fs.existsSync(absoluteFilePath) && !absoluteFilePath.endsWith('.svg')) {
+                const fileBuffer = await fs.promises.readFile(absoluteFilePath);
+                if (fileBuffer && fileBuffer.length > 0) {
+                  const base64Data = fileBuffer.toString('base64');
+                  const genRes = await ai.models.generateContent({
+                    model: "gemini-2.5-flash",
+                    contents: {
+                      parts: [
+                        { inlineData: { mimeType: "image/jpeg", data: base64Data } },
+                        { text: "This is an Instagram post. Analyze this image and generate a realistic, high-fidelity descriptive caption (written in the natural voice of an Instagram creator) along with 5-10 relevant hashtags. Do not include any conversational fluff or meta-text." }
+                      ]
+                    }
+                  });
+                  if (genRes && genRes.text) {
+                    result.caption = genRes.text.trim();
+                    console.log(`[Thumbnail Scraper] [Gemini Vision Success] Generated caption for post ${postId}`);
                   }
-                });
-                if (genRes && genRes.text) {
-                  result.caption = genRes.text.trim();
-                  console.log(`[Thumbnail Scraper] [Gemini Vision Success] Generated caption: ${result.caption.substring(0, 100)}...`);
                 }
               }
+            } catch (aiErr: any) {
+              const errMsg = aiErr?.message || "";
+              if (errMsg.includes("API_KEY_INVALID") || errMsg.includes("API key not valid") || errMsg.includes("400")) {
+                isGeminiKeyValid = false;
+                console.log(`[Thumbnail Scraper] Gemini API key not valid; auto-captioning disabled.`);
+              }
             }
-          } catch (aiErr: any) {
-            console.log(`[Thumbnail Scraper] [Gemini Vision Note] Caption auto-generation bypassed (quota or key limit): ${aiErr.message}`);
           }
         }
         memoryCache.set(postId, { data: result, timestamp: Date.now() });
@@ -814,25 +826,22 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
   }
 
   // -----------------------------------------------------------------
-  // STRATEGY 4: Rotating Mirror Metatag Extractors (ddinstagram / vxinstagram / kkinstagram / instafix / ig3x)
+  // STRATEGY 4: Rotating Mirror Metatag Extractors (ddinstagram / vxinstagram / kkinstagram / instafix)
   // -----------------------------------------------------------------
   const mirrors = [
     { name: "ddinstagram", domain: "ddinstagram.com", url: `https://ddinstagram.com/p/${shortcode}/` },
     { name: "vxinstagram", domain: "vxinstagram.com", url: `https://vxinstagram.com/p/${shortcode}/` },
     { name: "kkinstagram", domain: "kkinstagram.com", url: `https://kkinstagram.com/p/${shortcode}/` },
-    { name: "instafix", domain: "instafix.app", url: `https://instafix.app/p/${shortcode}/` },
-    { name: "ig3x", domain: "ig3x.com", url: `https://ig3x.com/p/${shortcode}/` }
+    { name: "instafix", domain: "instafix.app", url: `https://instafix.app/p/${shortcode}/` }
   ];
 
   for (const mirror of mirrors) {
     if (isHostInCooldown(mirror.domain)) {
-      console.log(`[Thumbnail Scraper] [Strategy 2] Skipping mirror ${mirror.name} due to circuit breaker cooldown.`);
       continue;
     }
 
     try {
-      console.log(`[Thumbnail Scraper] [Strategy 2] Trying mirror: ${mirror.url}`);
-      const mirrorRes = await fetchWithTimeout(mirror.url, { headers, redirect: 'follow' }, 2500);
+      const mirrorRes = await fetchWithTimeout(mirror.url, { headers, redirect: 'follow' }, 2000);
       
       if (mirrorRes.ok) {
         recordHostSuccess(mirror.domain);
@@ -850,9 +859,8 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
 
         if (ogMatch && ogMatch[1]) {
           const mirrorImageUrl = cleanImageUrl(ogMatch[1]);
-          console.log(`[Thumbnail Scraper] [Strategy 2 - ${mirror.name}] Extracted image URL: ${mirrorImageUrl}`);
           
-          const imgRes = await fetchWithTimeout(mirrorImageUrl, { headers: getRandomHeaders(mirror.url) }, 3000);
+          const imgRes = await fetchWithTimeout(mirrorImageUrl, { headers: getRandomHeaders(mirror.url) }, 2500);
           if (imgRes.ok) {
             const bufferArray = await imgRes.arrayBuffer();
             const safeBuffer = Buffer.from(bufferArray);
@@ -864,7 +872,7 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
               }
               await fs.promises.writeFile(absolutePathJpg, safeBuffer);
               const duration = Date.now() - startTime;
-              console.log(`[Thumbnail Scraper] [Strategy 2 SUCCESS (${mirror.name})] Saved JPG in ${duration}ms!`);
+              console.log(`[Thumbnail Scraper] [Strategy 4 SUCCESS (${mirror.name})] Saved JPG in ${duration}ms!`);
               
               return {
                 success: true,
@@ -881,9 +889,8 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
       } else {
         recordHostFailure(mirror.domain);
       }
-    } catch (err: any) {
+    } catch {
       recordHostFailure(mirror.domain);
-      console.log(`[Thumbnail Scraper] [Strategy 2 - ${mirror.name} Bypassed]: ${err.message || err}`);
     }
   }
 
@@ -1376,6 +1383,70 @@ app.post("/api/save-scraping-config", (req, res) => {
     res.json({ success: true, message: "Scraper configuration updated successfully." });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Test/Check Instagram Session Cookie Health
+app.post("/api/check-session", async (req, res) => {
+  const configPath = path.join(process.cwd(), "scripts", "scraping_config.json");
+  let sessionCookie = req.body?.session_cookie;
+  let username = req.body?.username;
+
+  if (!sessionCookie && fs.existsSync(configPath)) {
+    try {
+      const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      sessionCookie = cfg.session_cookie || "";
+      if (!username) username = cfg.username || "";
+    } catch (e) {}
+  }
+
+  if (!sessionCookie || sessionCookie.trim() === "" || sessionCookie === "●●●●●●●●●●●●") {
+    res.json({
+      success: false,
+      authenticated: false,
+      message: "No active session cookie configured. Instagram requests will run anonymously with standard rate limits."
+    });
+    return;
+  }
+
+  try {
+    const testUrl = "https://i.instagram.com/api/v1/accounts/current_user/?edit=true";
+    const customHeaders: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
+      'X-IG-App-ID': '936619743392459',
+      'X-ASBD-ID': '198387',
+      'Cookie': `sessionid=${sessionCookie}; csrftoken=missing${username ? `; ds_user_id=${username}` : ''}`,
+      'Accept': '*/*'
+    };
+
+    const response = await fetchWithTimeout(testUrl, { headers: customHeaders }, 4000);
+    if (response.ok) {
+      const data = await response.json();
+      const user = data?.user;
+      res.json({
+        success: true,
+        authenticated: true,
+        username: user?.username || username || "Active User",
+        fullName: user?.full_name || "",
+        message: `Session verified active! Authenticated as @${user?.username || username || 'user'}.`
+      });
+      return;
+    } else {
+      res.json({
+        success: false,
+        authenticated: false,
+        httpStatus: response.status,
+        message: `Session cookie returned HTTP ${response.status}. It may have expired or Instagram requires re-verification.`
+      });
+      return;
+    }
+  } catch (err: any) {
+    res.json({
+      success: false,
+      authenticated: false,
+      error: err.message,
+      message: "Could not reach Instagram verification servers. Check your proxy or network connection."
+    });
   }
 });
 

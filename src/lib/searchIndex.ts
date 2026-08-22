@@ -75,6 +75,55 @@ export function buildSearchIndex(posts: Post[]): FullTextSearchIndex {
 }
 
 /**
+ * Incrementally updates or removes a single post in the inverted index in O(tokens) time
+ */
+export function updatePostInIndex(
+  index: FullTextSearchIndex,
+  updatedPost: Post,
+  isRemoval = false
+): FullTextSearchIndex {
+  const { tokenMap, postTokensMap } = index;
+
+  // Clean old token mappings if already indexed
+  const oldTokens = postTokensMap.get(updatedPost.id);
+  if (oldTokens) {
+    for (const token of oldTokens) {
+      const set = tokenMap.get(token);
+      if (set) {
+        set.delete(updatedPost.id);
+        if (set.size === 0) tokenMap.delete(token);
+      }
+      const maxPrefix = Math.min(token.length, 12);
+      for (let i = 2; i <= maxPrefix; i++) {
+        const prefix = token.slice(0, i);
+        const pSet = tokenMap.get(prefix);
+        if (pSet) {
+          pSet.delete(updatedPost.id);
+          if (pSet.size === 0) tokenMap.delete(prefix);
+        }
+      }
+    }
+    postTokensMap.delete(updatedPost.id);
+  }
+
+  if (!isRemoval) {
+    const { tokens, prefixes } = extractTokens(updatedPost);
+    postTokensMap.set(updatedPost.id, tokens);
+    const allKeys = new Set([...tokens, ...prefixes]);
+    for (const key of allKeys) {
+      let idSet = tokenMap.get(key);
+      if (!idSet) {
+        idSet = new Set<string>();
+        tokenMap.set(key, idSet);
+      }
+      idSet.add(updatedPost.id);
+    }
+  }
+
+  return { tokenMap, postTokensMap };
+}
+
+/**
  * Fast lookup function returning post IDs matching the query using the inverted index
  */
 export function querySearchIndex(

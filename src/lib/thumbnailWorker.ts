@@ -1,6 +1,7 @@
 import { db } from "./db";
 import { usePostStore } from "../store/useStore";
 import { Post } from "../types/post";
+import { storeThumbnailInCache } from "./thumbnailCache";
 
 // Core Worker Execution State Flags
 let isWorkerRunning = false;
@@ -614,6 +615,14 @@ async function fetchThumbnailForPostInternal(post: Post) {
           post.creatorUsername.trim() === "")
       ) {
         updatedPost.creatorUsername = data.creatorUsername;
+      }
+
+      if (data.dataUrl) {
+        try {
+          fetch(data.dataUrl).then(r => r.blob()).then(blob => {
+            storeThumbnailInCache(data.path, blob);
+          }).catch(() => {});
+        } catch (e) {}
       }
 
       await db.posts.update(post.id, updatedPost);

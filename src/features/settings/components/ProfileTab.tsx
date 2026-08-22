@@ -185,7 +185,7 @@ export const ProfileTab: React.FC<ProfileTabProps> = React.memo(({
 
           <div className="sm:col-span-2">
             <label className="block text-[11px] font-bold text-m3-on-surface-variant mb-1">
-              Notification Email (Local Backup Logs)
+              Notification Email
             </label>
             <div className="relative">
               <Mail size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-m3-outline" />

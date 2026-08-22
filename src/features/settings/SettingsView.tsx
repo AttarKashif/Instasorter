@@ -1,60 +1,40 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   User,
-  Mail,
   Database,
   Trash2,
-  RefreshCw,
   Layers,
-  Heart,
   ShieldAlert,
-  Check,
-  Edit2,
-  Save,
-  Upload,
-  Folder,
-  LayoutGrid,
-  List,
-  ChevronRight,
-  ChevronDown,
-  ChevronUp,
-  Hash,
-  ExternalLink,
-  ArrowLeft,
   Moon,
   Sun,
-  MonitorSmartphone,
   FileSpreadsheet,
   Sliders,
   Sparkles,
   HardDrive,
-  Camera,
   X,
   Terminal,
   Cpu,
   Download,
   Search,
-  Clock,
   AlertTriangle,
   Keyboard,
-  Shield,
-  Command,
+  ChevronDown,
+  ChevronUp,
+  LayoutGrid,
 } from "lucide-react";
 import { KeyboardShortcutsTab } from "./components/KeyboardShortcutsTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { PreferencesTab } from "./components/PreferencesTab";
 import { ScraperTab } from "./components/ScraperTab";
 import { MaintenanceTab } from "./components/MaintenanceTab";
-import { BackupTab } from "./components/BackupTab";
 import { TelemetryTab } from "./components/TelemetryTab";
 import { motion, AnimatePresence } from "motion/react";
 import toast from "react-hot-toast";
 import { usePostStore } from "../../store/useStore";
 import { db } from "../../lib/db";
 import { triggerVibration } from "../../lib/vibrate";
-import { appLogger, LogEntry, LogCategory } from "../../lib/appLogger";
+import { appLogger, LogEntry } from "../../lib/appLogger";
 import {
-  retrySingleThumbnail,
   isWorkerActive,
   registerProgressCallback,
   unregisterProgressCallback,
@@ -163,36 +143,40 @@ export const SettingsView = React.memo(
     }, [posts]);
 
     type SettingsTab =
-      | "overview"
-      | "profile"
-      | "preferences"
-      | "shortcuts"
-      | "scraper"
-      | "maintenance"
-      | "backup"
-      | "telemetry";
+      | "general"
+      | "appearance"
+      | "curation"
+      | "data"
+      | "advanced"
+      | "danger";
 
-    const [activeTab, setActiveTab] = useState<SettingsTab>("overview");
+    const [activeTab, setActiveTab] = useState<SettingsTab>("general");
     const [settingsSearchQuery, setSettingsSearchQuery] = useState("");
+    const [dangerCheck1, setDangerCheck1] = useState(false);
+    const [dangerCheck2, setDangerCheck2] = useState(false);
+
+    // Reset checkboxes on activeTab changes for safety
+    useEffect(() => {
+      setDangerCheck1(false);
+      setDangerCheck2(false);
+    }, [activeTab]);
 
     // Auto-switch tab based on search query if query matches specific tab keywords
     useEffect(() => {
       if (!settingsSearchQuery.trim()) return;
       const q = settingsSearchQuery.toLowerCase();
-      if (["shortcut", "key", "hotkey", "keyboard", "nav", "space", "enter", "escape"].some((k) => q.includes(k))) {
-        setActiveTab("shortcuts");
-      } else if (["proxy", "cookie", "session", "instaloader", "probe", "gql", "scraper", "password"].some((k) => q.includes(k))) {
-        setActiveTab("scraper");
-      } else if (["log", "crash", "freeze", "error", "telemetry", "stack", "observability"].some((k) => q.includes(k))) {
-        setActiveTab("telemetry");
-      } else if (["backup", "export", "json", "csv", "reset", "wipe", "factory", "clear"].some((k) => q.includes(k))) {
-        setActiveTab("backup");
-      } else if (["storage", "quota", "thumbnail", "index", "duplicate", "tag", "cache"].some((k) => q.includes(k))) {
-        setActiveTab("maintenance");
-      } else if (["theme", "dark", "light", "compact", "grid", "motion", "anim", "worker", "organizer"].some((k) => q.includes(k))) {
-        setActiveTab("preferences");
-      } else if (["profile", "curator", "avatar", "handle", "email", "name"].some((k) => q.includes(k))) {
-        setActiveTab("profile");
+      if (["shortcut", "key", "hotkey", "keyboard", "nav", "space", "enter", "escape", "organizer", "smart"].some((k) => q.includes(k))) {
+        setActiveTab("curation");
+      } else if (["proxy", "cookie", "session", "instaloader", "probe", "gql", "scraper", "password", "log", "crash", "freeze", "error", "telemetry", "stack", "observability", "diagnostic", "maintenance", "repair", "index", "duplicate", "tag"].some((k) => q.includes(k))) {
+        setActiveTab("advanced");
+      } else if (["reset", "wipe", "factory", "clear", "danger"].some((k) => q.includes(k))) {
+        setActiveTab("danger");
+      } else if (["backup", "export", "json", "csv", "storage", "quota", "thumbnail", "cache"].some((k) => q.includes(k))) {
+        setActiveTab("data");
+      } else if (["theme", "dark", "light", "compact", "grid", "motion", "anim", "animation"].some((k) => q.includes(k))) {
+        setActiveTab("appearance");
+      } else if (["profile", "curator", "avatar", "handle", "email", "name", "display"].some((k) => q.includes(k))) {
+        setActiveTab("general");
       }
     }, [settingsSearchQuery]);
 
@@ -228,6 +212,7 @@ export const SettingsView = React.memo(
     const [logFilterCategory, setLogFilterCategory] = useState<string>("all");
     const [logSearchText, setLogSearchText] = useState("");
     const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
+    const [expandedSection, setExpandedSection] = useState<"scraper" | "maintenance" | "diagnostics" | null>(null);
 
     useEffect(() => {
       const unsubscribe = appLogger.subscribe((updatedLogs) => {
@@ -494,44 +479,6 @@ export const SettingsView = React.memo(
       toast.success(val ? "Compact grid density enabled." : "Standard grid density restored.");
     }, []);
 
-    // Accordion State for Hick's Law compliance
-    const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({
-      storage: false,
-      scraper: false,
-      backup: false,
-      telemetry: false,
-    });
-
-    const toggleAccordion = useCallback((key: string) => {
-      triggerVibration("light");
-      setExpandedAccordions((prev) => ({
-        ...prev,
-        [key]: !prev[key],
-      }));
-    }, []);
-
-    const expandAllAccordions = useCallback(() => {
-      triggerVibration("light");
-      setExpandedAccordions({
-        storage: true,
-        scraper: true,
-        backup: true,
-        telemetry: true,
-      });
-      toast.success("Expanded all advanced sections.");
-    }, []);
-
-    const collapseAllAccordions = useCallback(() => {
-      triggerVibration("light");
-      setExpandedAccordions({
-        storage: false,
-        scraper: false,
-        backup: false,
-        telemetry: false,
-      });
-      toast.success("Collapsed all advanced sections.");
-    }, []);
-
     // Storage Stats
     const [storageInfo, setStorageInfo] = useState<{
       usage: number;
@@ -789,14 +736,12 @@ export const SettingsView = React.memo(
       icon: React.ReactNode;
       badge?: string | number;
     }[] = [
-      { id: "overview", label: "Overview", icon: <LayoutGrid size={15} /> },
-      { id: "profile", label: "Profile", icon: <User size={15} />, badge: displayName || "Curator" },
-      { id: "preferences", label: "Preferences", icon: <Sliders size={15} /> },
-      { id: "shortcuts", label: "Shortcuts", icon: <Keyboard size={15} />, badge: "Hotkeys" },
-      { id: "maintenance", label: "Storage & Cache", icon: <Database size={15} />, badge: posts.length },
-      { id: "scraper", label: "Scraper Config", icon: <Cpu size={15} /> },
-      { id: "backup", label: "Backup & Export", icon: <Layers size={15} /> },
-      { id: "telemetry", label: "Observability", icon: <Terminal size={15} />, badge: logStats.total },
+      { id: "general", label: "General", icon: <User size={15} /> },
+      { id: "appearance", label: "Appearance", icon: <Sliders size={15} /> },
+      { id: "curation", label: "Curation", icon: <LayoutGrid size={15} /> },
+      { id: "data", label: "Data & Storage", icon: <Database size={15} /> },
+      { id: "advanced", label: "Advanced", icon: <Terminal size={15} /> },
+      { id: "danger", label: "Danger Zone", icon: <ShieldAlert size={15} /> },
     ];
 
     const settingsCategories: {
@@ -810,30 +755,9 @@ export const SettingsView = React.memo(
       }[];
     }[] = [
       {
-        id: "general",
-        title: "General Curation",
-        tabs: [
-          { id: "overview", label: "Overview", icon: <LayoutGrid size={15} /> },
-          { id: "profile", label: "Profile & Identity", icon: <User size={15} />, badge: displayName || "Curator" },
-          { id: "preferences", label: "Preferences & Theme", icon: <Sliders size={15} /> },
-          { id: "shortcuts", label: "Keyboard Shortcuts", icon: <Keyboard size={15} />, badge: "Hotkeys" },
-        ]
-      },
-      {
-        id: "data",
-        title: "Data Management",
-        tabs: [
-          { id: "maintenance", label: "Storage & Cache", icon: <Database size={15} />, badge: posts.length },
-          { id: "scraper", label: "Scraper Engine", icon: <Cpu size={15} /> },
-          { id: "backup", label: "Backup & Export", icon: <Layers size={15} /> },
-        ]
-      },
-      {
-        id: "advanced",
-        title: "Advanced System",
-        tabs: [
-          { id: "telemetry", label: "System Telemetry", icon: <Terminal size={15} />, badge: logStats.total },
-        ]
+        id: "all_categories",
+        title: "Settings Groups",
+        tabs: tabsList
       }
     ];
 
@@ -937,483 +861,570 @@ export const SettingsView = React.memo(
         <div className="flex-1 flex flex-col md:flex-row min-h-0 h-full overflow-hidden">
           {/* Desktop Left Sidebar: Vertical Navigation */}
           <aside className="hidden md:flex flex-col w-[260px] border-r border-m3-outline-variant/40 bg-m3-surface-low/30 p-5 space-y-5 shrink-0 overflow-y-auto select-none">
-            {settingsCategories.map((cat) => (
-              <div key={cat.id} className="space-y-2">
-                <h2 className="px-2 text-[10px] uppercase tracking-wider font-extrabold text-m3-outline font-mono">
-                  {cat.title}
-                </h2>
-                <div className="flex flex-col gap-1">
-                  {cat.tabs.map((tab) => {
-                    const isActive = activeTab === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        onClick={() => {
-                          triggerVibration("light");
-                          setActiveTab(tab.id as SettingsTab);
-                        }}
-                        className={`group flex items-center justify-between w-full px-3 py-2 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer border ${
+            <div className="space-y-2">
+              <h2 className="px-2 text-[10px] uppercase tracking-wider font-extrabold text-m3-outline font-mono">
+                Settings Groups
+              </h2>
+              <div className="flex flex-col gap-1">
+                {tabsList.map((tab) => {
+                  const isActive = activeTab === tab.id;
+                  const isDanger = tab.id === "danger";
+                  return (
+                    <button
+                      key={tab.id}
+                      onClick={() => {
+                        triggerVibration("light");
+                        setActiveTab(tab.id);
+                      }}
+                      className={`group flex items-center justify-between w-full px-3 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer border ${
+                        isActive
+                          ? isDanger
+                            ? "bg-red-500/10 border-red-500/30 text-red-600 shadow-xs font-extrabold"
+                            : "bg-m3-primary-container border-m3-primary/25 text-m3-on-primary-container shadow-xs font-extrabold"
+                          : "bg-transparent border-transparent text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-container/60"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className={`transition-transform duration-200 group-hover:scale-110 ${
                           isActive
-                            ? "bg-m3-primary-container border-m3-primary/25 text-m3-on-primary-container shadow-xs font-extrabold"
-                            : "bg-transparent border-transparent text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-container/60"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span className={`transition-transform duration-200 group-hover:scale-110 ${isActive ? 'text-m3-on-primary-container' : 'text-m3-on-surface-variant'}`}>
-                            {tab.icon}
-                          </span>
-                          <span className="font-sans text-[11px]">{tab.label}</span>
-                        </div>
-                        {tab.badge !== undefined && (
-                          <span
-                            className={`px-1.5 py-0.5 rounded-full text-[9px] font-mono font-bold whitespace-nowrap leading-none ${
-                              isActive
-                                ? "bg-m3-primary text-m3-on-primary"
-                                : "bg-m3-outline-variant/30 text-m3-on-surface-variant"
-                            }`}
-                          >
-                            {tab.badge}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
+                            ? isDanger
+                              ? "text-red-600"
+                              : "text-m3-on-primary-container"
+                            : isDanger
+                              ? "text-red-500/70 group-hover:text-red-600"
+                              : "text-m3-on-surface-variant"
+                        }`}>
+                          {tab.icon}
+                        </span>
+                        <span className="font-sans text-[11px]">{tab.label}</span>
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
-            ))}
+            </div>
           </aside>
 
           {/* Scrollable Content Container (Desktop: Right Column) */}
           <div className="flex-1 overflow-y-auto overscroll-contain [webkit-overflow-scrolling:touch] p-4 pb-28 md:p-8 max-w-4xl w-full">
             <AnimatePresence mode="wait">
               <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.15 }}
-              className="space-y-6"
-            >
-              {/* TAB 0: OVERVIEW */}
-              {activeTab === "overview" && (
-                <div className="space-y-8">
-                  {/* Overview Header Banner */}
-                  <div className="p-5 rounded-[20px] bg-gradient-to-br from-m3-primary/5 via-transparent to-m3-primary/5 border border-m3-outline-variant/30 relative overflow-hidden select-none">
-                    <div className="absolute right-0 top-0 translate-x-12 -translate-y-12 w-48 h-48 bg-m3-primary/5 rounded-full blur-2xl" />
-                    <h2 className="text-sm font-bold font-display text-m3-on-surface uppercase tracking-wider flex items-center gap-2">
-                      <Sparkles size={14} className="text-m3-primary animate-pulse" />
-                      Instasorter Dashboard Control
-                    </h2>
-                    <p className="text-[11px] text-m3-on-surface-variant font-sans mt-1 max-w-2xl leading-relaxed">
-                      Welcome to your system settings. This dashboard offers a tiered overview of your curator identity, browser caching, scrapers, and telemetry. Use the cards below to configure your installation or check real-time system health.
-                    </p>
-                  </div>
-
-                  {/* Tiered Grid Categories */}
-                  {settingsCategories.map((category) => (
-                    <div key={category.id} className="space-y-4">
-                      {/* Category Header */}
-                      <div className="border-b border-m3-outline-variant/30 pb-2">
-                        <h3 className="text-[11px] font-extrabold text-m3-primary uppercase tracking-widest font-mono flex items-center gap-2">
-                          <span className="w-1.5 h-1.5 rounded-full bg-m3-primary" />
-                          {category.id === "general" ? "I. General / Curation" : category.id === "data" ? "II. Data & Scraping" : "III. System Diagnostics"}
-                        </h3>
-                        <p className="text-[10px] text-m3-on-surface-variant mt-0.5">
-                          {category.id === "general" 
-                            ? "Configure your personal curator profile, user preferences, look-and-feel, and access tools."
-                            : category.id === "data"
-                            ? "Inspect local IndexedDB quotas, edit Instagram scrapers, export backups, or normalize library tags."
-                            : "Track active main thread execution logs, examine observabilities, and debug engine test probes."}
-                        </p>
+                key={activeTab}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.15 }}
+                className="space-y-6"
+              >
+                {/* 1. GENERAL TAB */}
+                {activeTab === "general" && (
+                  <div className="space-y-6">
+                    {/* Minimalist Outcomes-Oriented Library Status Overview */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="p-4 bg-m3-surface-low border border-m3-outline-variant/25 rounded-2xl flex items-center gap-3.5">
+                        <div className="p-2.5 rounded-xl bg-m3-primary/5 text-m3-primary border border-m3-outline-variant/15">
+                          <HardDrive size={16} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-mono font-bold text-m3-outline uppercase leading-none">Saved Items</p>
+                          <h4 className="text-sm font-extrabold font-display text-m3-on-surface mt-1.5 leading-none">
+                            {posts.length} bookmarks
+                          </h4>
+                        </div>
                       </div>
 
-                      {/* Card Grid */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                        {category.tabs
-                          .filter((tab) => tab.id !== "overview") // skip overview itself in the grid
-                          .map((tab) => {
-                            return (
-                              <div
-                                key={tab.id}
-                                className="group flex flex-col justify-between p-5 bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] transition-all duration-300 hover:scale-[1.01] hover:border-m3-primary/20 hover:shadow-xs select-none"
-                              >
-                                <div>
-                                  {/* Title & Icon Header */}
-                                  <div className="flex items-center justify-between mb-3.5">
-                                    <div className="flex items-center gap-3">
-                                      <div className="p-2.5 rounded-xl bg-m3-primary/5 text-m3-primary border border-m3-outline-variant/20 transition-colors group-hover:bg-m3-primary/10">
-                                        {tab.icon}
-                                      </div>
-                                      <h4 className="text-xs font-bold font-display text-m3-on-surface tracking-wide">
-                                        {tab.label}
-                                      </h4>
-                                    </div>
-                                    {tab.badge !== undefined && (
-                                      <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold bg-m3-outline-variant/30 text-m3-on-surface-variant whitespace-nowrap">
-                                        {tab.badge}
-                                      </span>
-                                    )}
-                                  </div>
+                      <div className="p-4 bg-m3-surface-low border border-m3-outline-variant/25 rounded-2xl flex items-center gap-3.5">
+                        <div className="p-2.5 rounded-xl bg-m3-primary/5 text-m3-primary border border-m3-outline-variant/15">
+                          <User size={16} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-mono font-bold text-m3-outline uppercase leading-none">Source Handle</p>
+                          <h4 className="text-sm font-extrabold font-display text-m3-on-surface mt-1.5 leading-none truncate max-w-[150px]">
+                            {username ? `@${username}` : "Not Configured"}
+                          </h4>
+                        </div>
+                      </div>
 
-                                  {/* Descriptive Subtext */}
-                                  <p className="text-[11px] text-m3-on-surface-variant leading-relaxed mb-4">
-                                    {tab.id === "profile" && "Manage display name, Instagram handle, curator email, and sync with your local metadata tracker."}
-                                    {tab.id === "preferences" && "Customize visual styling, dark room theme, compact list view, animations, and background media processing."}
-                                    {tab.id === "shortcuts" && "Quick reference list of available hotkeys for fluid, ultra-high-efficiency mouse-free media curation."}
-                                    {tab.id === "maintenance" && "Inspect local IndexedDB disk usage, run index checking, normalize hashtag casings, or redownload missing thumbnails."}
-                                    {tab.id === "scraper" && "Configure login keys, proxy servers, and SOCKS5 endpoints. Execute test probes against the Instaloader bridge."}
-                                    {tab.id === "backup" && "Export your library into secure JSON or standard CSV backups. Erase cache or perform structural data wipes."}
-                                    {tab.id === "telemetry" && "Real-time diagnostic traces, thread locks tracker, API health observability, and logs export."}
-                                  </p>
-
-                                  {/* Dynamic Inline Statuses & Mini-Toggles */}
-                                  <div className="py-2.5 px-3 bg-m3-surface/40 rounded-xl border border-m3-outline-variant/15 text-[10px] space-y-2 mb-4 font-sans text-m3-on-surface-variant">
-                                    {tab.id === "profile" && (
-                                      <div className="space-y-1.5 font-mono">
-                                        <div className="flex items-center justify-between">
-                                          <span>Curator:</span>
-                                          <span className="font-bold text-m3-on-surface truncate max-w-[120px]">{displayName}</span>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span>Username:</span>
-                                          <span className="text-m3-primary">@{username || "none"}</span>
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {tab.id === "preferences" && (
-                                      <div className="space-y-2">
-                                        <div className="flex items-center justify-between">
-                                          <span className="font-mono">Dark Room Theme:</span>
-                                          <UnifiedSwitch
-                                            checked={theme === "dark"}
-                                            onChange={onThemeToggle || (() => {})}
-                                            ariaLabel="Toggle dark mode theme"
-                                          />
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span className="font-mono">Compact Mode:</span>
-                                          <UnifiedSwitch
-                                            checked={compactMode}
-                                            onChange={handleSetCompactMode}
-                                            ariaLabel="Toggle compact layout"
-                                          />
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span className="font-mono">UI Animations:</span>
-                                          <UnifiedSwitch
-                                            checked={animationsEnabled}
-                                            onChange={handleSetAnimationsEnabled}
-                                            ariaLabel="Toggle UI motion physics"
-                                          />
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span className="font-mono">Background Organizer:</span>
-                                          <UnifiedSwitch
-                                            checked={isBackgroundOrganizerEnabled}
-                                            onChange={setIsBackgroundOrganizerEnabled}
-                                            ariaLabel="Toggle background categorizer worker"
-                                          />
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {tab.id === "shortcuts" && (
-                                      <div className="space-y-1.5 font-mono">
-                                        <div className="flex items-center justify-between">
-                                          <span>Go to Home:</span>
-                                          <kbd className="px-1.5 py-0.5 rounded-md bg-m3-surface-container border border-m3-outline-variant/45 text-[9px] font-extrabold text-m3-on-surface">1</kbd>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span>Open Shortcuts:</span>
-                                          <kbd className="px-1.5 py-0.5 rounded-md bg-m3-surface-container border border-m3-outline-variant/45 text-[9px] font-extrabold text-m3-on-surface">?</kbd>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span>Focus Post:</span>
-                                          <kbd className="px-1.5 py-0.5 rounded-md bg-m3-surface-container border border-m3-outline-variant/45 text-[9px] font-extrabold text-m3-on-surface">J / K</kbd>
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {tab.id === "maintenance" && (
-                                      <div className="space-y-1.5 font-mono">
-                                        <div className="flex items-center justify-between">
-                                          <span>IndexedDB Quota:</span>
-                                          <span className="font-bold text-m3-on-surface">
-                                            {storageInfo 
-                                              ? `${(storageInfo.usage / (1024 * 1024)).toFixed(1)}MB of ${(storageInfo.quota / (1024 * 1024 * 1024)).toFixed(0)}GB`
-                                              : "Checking..."}
-                                          </span>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span>Library Size:</span>
-                                          <span className="font-bold text-m3-primary">{posts.length} saved posts</span>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span>Thumbnails Queue:</span>
-                                          <span className="text-[9px] bg-m3-outline-variant/30 text-m3-on-surface px-1.5 py-0.2 rounded-full font-bold">
-                                            {workerStats.pending} pending
-                                          </span>
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {tab.id === "scraper" && (
-                                      <div className="space-y-1.5 font-mono">
-                                        <div className="flex items-center justify-between">
-                                          <span>Instaloader Auth:</span>
-                                          <span className={`font-bold ${scrapingUser ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600"}`}>
-                                            {scrapingUser ? scrapingUser : "Anonymous"}
-                                          </span>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span>Proxy Server:</span>
-                                          <span className="truncate max-w-[140px]" title={scrapingProxy}>
-                                            {scrapingProxy ? scrapingProxy : "Direct Connection"}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {tab.id === "backup" && (
-                                      <div className="flex flex-col gap-1.5 py-0.5">
-                                        <div className="flex gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              triggerVibration("light");
-                                              exportData();
-                                            }}
-                                            className="flex-1 py-1 px-2 bg-m3-surface border border-m3-outline-variant/50 hover:bg-m3-surface-variant/20 rounded-lg text-[9px] font-bold text-m3-on-surface cursor-pointer select-none text-center whitespace-nowrap"
-                                          >
-                                            Export JSON
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              triggerVibration("light");
-                                              exportCSVData();
-                                            }}
-                                            className="flex-1 py-1 px-2 bg-m3-surface border border-m3-outline-variant/50 hover:bg-m3-surface-variant/20 rounded-lg text-[9px] font-bold text-m3-on-surface cursor-pointer select-none text-center whitespace-nowrap"
-                                          >
-                                            Export CSV
-                                          </button>
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {tab.id === "telemetry" && (
-                                      <div className="space-y-1.5 font-mono">
-                                        <div className="flex items-center justify-between">
-                                          <span>Live Diagnostic:</span>
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              handleToggleLogging(!isLoggingActive);
-                                            }}
-                                            className={`px-2 py-0.5 rounded-full text-[9px] font-bold cursor-pointer select-none whitespace-nowrap border ${
-                                              isLoggingActive 
-                                                ? "bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:border-emerald-900 dark:text-emerald-300"
-                                                : "bg-stone-50 border-stone-200 text-stone-500 dark:bg-stone-900/30 dark:border-stone-800 dark:text-stone-400"
-                                            }`}
-                                          >
-                                            {isLoggingActive ? "Active" : "Disabled"}
-                                          </button>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                          <span>Total Traces:</span>
-                                          <span>{logStats.total} traces</span>
-                                        </div>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* Navigate / Config Footer Button */}
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    triggerVibration("light");
-                                    setActiveTab(tab.id as SettingsTab);
-                                  }}
-                                  className="w-full py-2 bg-m3-primary hover:bg-m3-primary/95 text-m3-on-primary font-bold text-[10px] rounded-xl transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap"
-                                >
-                                  <span>Configure {tab.label}</span>
-                                  <ChevronRight size={10} />
-                                </button>
-                              </div>
-                            );
-                          })}
+                      <div className="p-4 bg-m3-surface-low border border-m3-outline-variant/25 rounded-2xl flex items-center gap-3.5">
+                        <div className="p-2.5 rounded-xl bg-m3-primary/5 text-m3-primary border border-m3-outline-variant/15">
+                          <Layers size={16} />
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-mono font-bold text-m3-outline uppercase leading-none">Local Backup</p>
+                          <h4 className="text-sm font-extrabold font-display text-emerald-600 dark:text-emerald-400 mt-1.5 leading-none">
+                            JSON &amp; CSV Ready
+                          </h4>
+                        </div>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
 
-              {/* TAB 1: CURATOR PROFILE */}
-              {activeTab === "profile" && (
-                <section className="space-y-4">
-                  <SettingSectionHeader
-                    icon={<User size={18} />}
-                    title="Account & Curator Profile"
-                    subtitle="Display name, Instagram handle, email credentials, and library metrics."
-                  />
-                  <ProfileTab
-                    displayName={displayName}
-                    setDisplayName={setDisplayName}
-                    username={username}
-                    setUsername={setUsername}
-                    email={email}
-                    setEmail={setEmail}
-                    avatarUrl={avatarUrl}
-                    onAvatarUpload={handleAvatarUpload}
-                    onRemoveAvatar={handleRemoveAvatar}
-                    isEditing={isEditing}
-                    setIsEditing={setIsEditing}
-                    avatarInputRef={avatarInputRef}
-                    postsCount={posts.length}
-                    onSaveProfile={handleSaveProfile}
-                  />
-                </section>
-              )}
+                    <section className="space-y-4">
+                      <SettingSectionHeader
+                        icon={<User size={18} />}
+                        title="Curator Settings"
+                        subtitle="Manage your curator display name, notification email, and profile details."
+                      />
+                      <ProfileTab
+                        displayName={displayName}
+                        setDisplayName={setDisplayName}
+                        username={username}
+                        setUsername={setUsername}
+                        email={email}
+                        setEmail={setEmail}
+                        avatarUrl={avatarUrl}
+                        onAvatarUpload={handleAvatarUpload}
+                        onRemoveAvatar={handleRemoveAvatar}
+                        isEditing={isEditing}
+                        setIsEditing={setIsEditing}
+                        avatarInputRef={avatarInputRef}
+                        postsCount={posts.length}
+                        onSaveProfile={handleSaveProfile}
+                      />
+                    </section>
+                  </div>
+                )}
 
-              {/* TAB 2: PREFERENCES */}
-              {activeTab === "preferences" && (
-                <section className="space-y-4">
-                  <SettingSectionHeader
-                    icon={<Sliders size={18} />}
-                    title="Primary App Preferences"
-                    subtitle="Essential toggleable controls for visual theme, grid density, animation physics, and background workers."
-                  />
-                  <PreferencesTab
-                    theme={theme}
-                    onThemeToggle={onThemeToggle}
-                    animationsEnabled={animationsEnabled}
-                    onSetAnimationsEnabled={handleSetAnimationsEnabled}
-                    compactMode={compactMode}
-                    onSetCompactMode={handleSetCompactMode}
-                    isBackgroundOrganizerEnabled={isBackgroundOrganizerEnabled}
-                    setIsBackgroundOrganizerEnabled={setIsBackgroundOrganizerEnabled}
-                    backgroundOrganizerStatus={backgroundOrganizerStatus}
-                    backgroundOrganizerProgress={backgroundOrganizerProgress}
-                  />
-                </section>
-              )}
+                {/* 2. APPEARANCE TAB */}
+                {activeTab === "appearance" && (
+                  <section className="space-y-4">
+                    <SettingSectionHeader
+                      icon={<Sliders size={18} />}
+                      title="Appearance Preferences"
+                      subtitle="Customize interface theme look-and-feel, layout density, and animations."
+                    />
+                    <PreferencesTab
+                      theme={theme}
+                      onThemeToggle={onThemeToggle}
+                      animationsEnabled={animationsEnabled}
+                      onSetAnimationsEnabled={handleSetAnimationsEnabled}
+                      compactMode={compactMode}
+                      onSetCompactMode={handleSetCompactMode}
+                    />
+                  </section>
+                )}
 
-              {/* TAB 3: KEYBOARD SHORTCUTS */}
-              {activeTab === "shortcuts" && (
-                <section className="space-y-4">
-                  <SettingSectionHeader
-                    icon={<Keyboard size={18} />}
-                    title="Keyboard Shortcuts Cheatsheet"
-                    subtitle="Interactive reference for all single-key navigation, post curation, and overlay hotkeys."
-                  />
-                  <KeyboardShortcutsTab />
-                </section>
-              )}
+                {/* 3. CURATION TAB */}
+                {activeTab === "curation" && (
+                  <section className="space-y-6">
+                    <SettingSectionHeader
+                      icon={<LayoutGrid size={18} />}
+                      title="Curation Preferences"
+                      subtitle="Configure Instagram source handles, smart background categorization, and navigation hotkeys."
+                    />
 
-              {/* TAB 4: STORAGE & MAINTENANCE */}
-              {activeTab === "maintenance" && (
-                <section className="space-y-4">
-                  <SettingSectionHeader
-                    icon={<Database size={18} />}
-                    title="Storage, Caching & Maintenance"
-                    subtitle="Inspect browser IndexedDB quota, thumbnail worker status, duplicate items, and tag normalization."
-                  />
-                  <MaintenanceTab
-                    storageInfo={storageInfo}
-                    postsCount={posts.length}
-                    isRefreshingLibrary={isRefreshingLibrary}
-                    onRefreshLibrary={handleRefreshLibrary}
-                    onScanDuplicates={handleAnalyzeDuplicates}
-                    onConsolidateTags={handleConsolidateTags}
-                    workerStats={workerStats}
-                    isDownloading={isDownloading}
-                    onRetryFailedThumbnails={retryFailedThumbnails}
-                  />
-                </section>
-              )}
+                    {/* Instagram Source Setting */}
+                    <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-6 shadow-xs space-y-4">
+                      <div className="flex items-center gap-3 pb-3 border-b border-m3-outline-variant/15">
+                        <div className="p-2 bg-m3-primary/10 text-m3-primary rounded-xl">
+                          <User size={14} />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-m3-on-surface">Instagram Source Handle</h4>
+                          <p className="text-[10px] text-m3-on-surface-variant font-sans">The default account handle used to resolve bookmarks.</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-col sm:flex-row gap-3 items-end">
+                        <div className="flex-1 w-full">
+                          <label className="block text-[11px] font-bold text-m3-on-surface-variant mb-1 font-sans">
+                            Instagram Username
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-m3-on-surface-variant text-xs font-mono">@</span>
+                            <input
+                              type="text"
+                              value={username}
+                              onChange={(e) => setUsername(e.target.value)}
+                              placeholder="curator_handle"
+                              className="w-full pl-7 pr-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-mono text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary"
+                            />
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerVibration("light");
+                            localStorage.setItem("instasorter_username", username);
+                            toast.success("Instagram handle saved successfully!");
+                          }}
+                          className="px-5 py-2.5 bg-m3-primary hover:bg-m3-primary/90 text-m3-on-primary font-bold text-xs rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 font-sans"
+                        >
+                          Save Handle
+                        </button>
+                      </div>
+                    </div>
 
-              {/* TAB 5: SCRAPER CONFIG */}
-              {activeTab === "scraper" && (
-                <section className="space-y-4">
-                  <SettingSectionHeader
-                    icon={<Cpu size={18} />}
-                    title="Instagram Scraper Credentials & Proxies"
-                    subtitle="Account credentials, session cookies, SOCKS5 proxies, and engine test probes."
-                  />
-                  <ScraperTab
-                    scrapingUser={scrapingUser}
-                    setScrapingUser={setScrapingUser}
-                    scrapingPass={scrapingPass}
-                    setScrapingPass={setScrapingPass}
-                    scrapingSession={scrapingSession}
-                    setScrapingSession={setScrapingSession}
-                    scrapingProxy={scrapingProxy}
-                    setScrapingProxy={setScrapingProxy}
-                    loadingConfig={loadingConfig}
-                    savingConfig={savingConfig}
-                    onSaveConfig={handleSaveScrapingConfig}
-                    throttleStatus={throttleStatus}
-                    testingInstaloader={testingInstaloader}
-                    onTestInstaloader={handleTestInstaloader}
-                    instaloaderResult={instaloaderResult}
-                    testingMediaScraper={testingMediaScraper}
-                    onTestMediaScraper={handleTestMediaScraper}
-                    mediaScraperResult={mediaScraperResult}
-                  />
-                </section>
-              )}
+                    {/* Smart Organizer Switch */}
+                    <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-6 shadow-xs space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary border border-m3-primary/20 shrink-0">
+                            <Cpu size={18} />
+                          </div>
+                          <div>
+                            <h3 className="text-xs font-bold uppercase tracking-wider text-m3-on-surface flex items-center gap-2 font-display">
+                              <span>Smart Organizer</span>
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
+                                Auto-categorize
+                              </span>
+                            </h3>
+                            <p className="text-[11px] text-m3-on-surface-variant mt-0.5 font-sans">
+                              Categorize unorganized saved posts into smart collections using client-side heuristics.
+                            </p>
+                          </div>
+                        </div>
+                        <UnifiedSwitch
+                          checked={isBackgroundOrganizerEnabled}
+                          onChange={setIsBackgroundOrganizerEnabled}
+                          ariaLabel="Toggle background categorizer worker"
+                        />
+                      </div>
+                    </div>
 
-              {/* TAB 6: BACKUP & RESET */}
-              {activeTab === "backup" && (
-                <section className="space-y-4">
-                  <SettingSectionHeader
-                    icon={<Layers size={18} />}
-                    title="Backup, Data Export & Reset Library"
-                    subtitle="Export database backups in JSON or CSV spreadsheets, or clear local storage."
-                  />
-                  <BackupTab
-                    postsCount={posts.length}
-                    onExportJSON={exportData}
-                    onExportCSV={exportCSVData}
-                    onShowConfirmClear={() => setShowConfirmClear(true)}
-                    onShowConfirmClearAll={() => setShowConfirmClearAll(true)}
-                  />
-                </section>
-              )}
+                    {/* Keyboard Shortcuts Cheatsheet */}
+                    <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-6 shadow-xs">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-m3-on-surface flex items-center gap-2 mb-4 font-display">
+                        <Keyboard size={14} className="text-m3-primary" />
+                        <span>Keyboard Shortcuts Cheatsheet</span>
+                      </h4>
+                      <KeyboardShortcutsTab />
+                    </div>
+                  </section>
+                )}
 
-              {/* TAB 7: TELEMETRY & LOGS */}
-              {activeTab === "telemetry" && (
-                <section className="space-y-4">
-                  <SettingSectionHeader
-                    icon={<Terminal size={18} />}
-                    title="Developer Diagnostics & Observability Logs"
-                    subtitle="Live telemetry tracking, main thread freezes, storage logs, and log export tools."
-                  />
-                  <TelemetryTab
-                    isLoggingActive={isLoggingActive}
-                    onToggleLogging={handleToggleLogging}
-                    logs={logs}
-                    logStats={{ ...logStats, info: logs.filter(l => l.category === "info").length }}
-                    logSearchText={logSearchText}
-                    setLogSearchText={setLogSearchText}
-                    logFilterCategory={logFilterCategory}
-                    setLogFilterCategory={setLogFilterCategory}
-                    filteredLogs={filteredLogs}
-                    expandedLogId={expandedLogId}
-                    setExpandedLogId={setExpandedLogId}
-                    onExportLogs={handleExportLogs}
-                    onClearLogs={handleClearLogs}
-                  />
-                </section>
-              )}
-            </motion.div>
-          </AnimatePresence>
+                {/* 4. DATA TAB */}
+                {activeTab === "data" && (
+                  <section className="space-y-4">
+                    <SettingSectionHeader
+                      icon={<Database size={18} />}
+                      title="Data &amp; Library Storage"
+                      subtitle="Inspect offline browser database utilization and export curation spreadsheet backups."
+                    />
+
+                    {/* Library Storage Meter (Maintenance stats but clean and simplified) */}
+                    <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-6 shadow-xs space-y-4">
+                      <div className="flex items-center gap-3 pb-3 border-b border-m3-outline-variant/15">
+                        <div className="p-2 bg-m3-primary/10 text-m3-primary rounded-xl">
+                          <HardDrive size={14} />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-m3-on-surface">Library Storage Usage</h4>
+                          <p className="text-[10px] text-m3-on-surface-variant font-sans">Local browser-allocated storage sandbox capacity</p>
+                        </div>
+                      </div>
+
+                      {storageInfo && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-xs font-mono">
+                            <span className="text-m3-on-surface-variant font-bold">
+                              {(storageInfo.usage / (1024 * 1024)).toFixed(1)} MB used of {(storageInfo.quota / (1024 * 1024 * 1024)).toFixed(1)} GB allocated
+                            </span>
+                            <span className="font-bold text-m3-primary">{storageInfo.percentage.toFixed(1)}%</span>
+                          </div>
+                          <div className="w-full bg-m3-outline-variant/20 rounded-full h-2 overflow-hidden">
+                            <div
+                              className="bg-m3-primary h-full transition-all duration-500"
+                              style={{ width: `${Math.max(storageInfo.percentage, 1)}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Backup & Export (BackupTab but outcome-oriented) */}
+                    <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-6 shadow-xs space-y-4">
+                      <div className="flex items-center gap-3 pb-3 border-b border-m3-outline-variant/15">
+                        <div className="p-2 bg-m3-primary/10 text-m3-primary rounded-xl">
+                          <Layers size={14} />
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-bold text-m3-on-surface">Backup &amp; Export Curation Library</h4>
+                          <p className="text-[10px] text-m3-on-surface-variant font-sans">Export your saved items as files for backup or external analysis</p>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-m3-on-surface-variant leading-relaxed font-sans">
+                        Export your entire Instagram curation library into JSON format for migrating across devices, or as a CSV spreadsheet for analyzing inside Microsoft Excel or Google Sheets.
+                      </p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerVibration("light");
+                            exportData();
+                          }}
+                          className="py-3 px-4 bg-m3-surface border border-m3-outline-variant/40 hover:border-m3-primary rounded-xl text-xs font-bold text-m3-on-surface transition-all cursor-pointer flex items-center justify-center gap-2 font-sans active:scale-95"
+                        >
+                          <Download size={14} className="text-m3-primary animate-bounce" />
+                          <span>Export JSON Backup</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            triggerVibration("light");
+                            exportCSVData();
+                          }}
+                          className="py-3 px-4 bg-m3-surface border border-m3-outline-variant/40 hover:border-m3-primary rounded-xl text-xs font-bold text-m3-on-surface transition-all cursor-pointer flex items-center justify-center gap-2 font-sans active:scale-95"
+                        >
+                          <FileSpreadsheet size={14} className="text-m3-primary" />
+                          <span>Export CSV Spreadsheet</span>
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {/* 5. ADVANCED TAB */}
+                {activeTab === "advanced" && (
+                  <section className="space-y-4">
+                    <SettingSectionHeader
+                      icon={<Terminal size={18} />}
+                      title="Advanced System"
+                      subtitle="Configure connection credentials, repair database indexes, and access system diagnostics via accordions."
+                    />
+
+                    <div className="space-y-4 pt-2">
+                      {/* Section A: Scraper / Connection Setup */}
+                      <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] overflow-hidden transition-all duration-300">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSection(expandedSection === "scraper" ? null : "scraper")}
+                          className="w-full px-6 py-4 flex items-center justify-between hover:bg-m3-surface-container/30 transition-all cursor-pointer text-left select-none"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-m3-primary/5 text-m3-primary rounded-xl">
+                              <Cpu size={16} />
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-extrabold text-m3-on-surface uppercase tracking-wider font-display">Scraper &amp; Connection Setup</h4>
+                              <p className="text-[10px] text-m3-on-surface-variant font-sans">Credentials, session tokens, and proxies</p>
+                            </div>
+                          </div>
+                          {expandedSection === "scraper" ? <ChevronUp size={16} className="text-m3-outline" /> : <ChevronDown size={16} className="text-m3-outline" />}
+                        </button>
+                        
+                        <AnimatePresence>
+                          {expandedSection === "scraper" && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="border-t border-m3-outline-variant/20 p-6 bg-m3-surface/30 space-y-4"
+                            >
+                              <ScraperTab
+                                scrapingUser={scrapingUser}
+                                setScrapingUser={setScrapingUser}
+                                scrapingPass={scrapingPass}
+                                setScrapingPass={setScrapingPass}
+                                scrapingSession={scrapingSession}
+                                setScrapingSession={setScrapingSession}
+                                scrapingProxy={scrapingProxy}
+                                setScrapingProxy={setScrapingProxy}
+                                loadingConfig={loadingConfig}
+                                savingConfig={savingConfig}
+                                onSaveConfig={handleSaveScrapingConfig}
+                                throttleStatus={throttleStatus}
+                                testingInstaloader={testingInstaloader}
+                                onTestInstaloader={handleTestInstaloader}
+                                instaloaderResult={instaloaderResult}
+                                testingMediaScraper={testingMediaScraper}
+                                onTestMediaScraper={handleTestMediaScraper}
+                                mediaScraperResult={mediaScraperResult}
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      {/* Section B: Maintenance & Repair */}
+                      <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] overflow-hidden transition-all duration-300">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSection(expandedSection === "maintenance" ? null : "maintenance")}
+                          className="w-full px-6 py-4 flex items-center justify-between hover:bg-m3-surface-container/30 transition-all cursor-pointer text-left select-none"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-m3-primary/5 text-m3-primary rounded-xl">
+                              <Database size={16} />
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-extrabold text-m3-on-surface uppercase tracking-wider font-display">Database Maintenance &amp; Repair</h4>
+                              <p className="text-[10px] text-m3-on-surface-variant font-sans">Re-indexing, duplicate detection, and tag consolidate actions</p>
+                            </div>
+                          </div>
+                          {expandedSection === "maintenance" ? <ChevronUp size={16} className="text-m3-outline" /> : <ChevronDown size={16} className="text-m3-outline" />}
+                        </button>
+                        
+                        <AnimatePresence>
+                          {expandedSection === "maintenance" && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="border-t border-m3-outline-variant/20 p-6 bg-m3-surface/30 space-y-4"
+                            >
+                              <MaintenanceTab
+                                storageInfo={storageInfo}
+                                postsCount={posts.length}
+                                isRefreshingLibrary={isRefreshingLibrary}
+                                onRefreshLibrary={handleRefreshLibrary}
+                                onScanDuplicates={handleAnalyzeDuplicates}
+                                onConsolidateTags={handleConsolidateTags}
+                                workerStats={workerStats}
+                                isDownloading={isDownloading}
+                                onRetryFailedThumbnails={retryFailedThumbnails}
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+
+                      {/* Section C: Diagnostics / Logs */}
+                      <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] overflow-hidden transition-all duration-300">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSection(expandedSection === "diagnostics" ? null : "diagnostics")}
+                          className="w-full px-6 py-4 flex items-center justify-between hover:bg-m3-surface-container/30 transition-all cursor-pointer text-left select-none"
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="p-2 bg-m3-primary/5 text-m3-primary rounded-xl">
+                              <Terminal size={16} />
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-extrabold text-m3-on-surface uppercase tracking-wider font-display">System Telemetry &amp; Logs</h4>
+                              <p className="text-[10px] text-m3-on-surface-variant font-sans">Developer diagnostics, trace recordings, and status exports</p>
+                            </div>
+                          </div>
+                          {expandedSection === "diagnostics" ? <ChevronUp size={16} className="text-m3-outline" /> : <ChevronDown size={16} className="text-m3-outline" />}
+                        </button>
+                        
+                        <AnimatePresence>
+                          {expandedSection === "diagnostics" && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: "auto", opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              transition={{ duration: 0.2 }}
+                              className="border-t border-m3-outline-variant/20 p-6 bg-m3-surface/30 space-y-4"
+                            >
+                              <TelemetryTab
+                                isLoggingActive={isLoggingActive}
+                                onToggleLogging={handleToggleLogging}
+                                logs={logs}
+                                logStats={{ ...logStats, info: logs.filter(l => l.category === "info").length }}
+                                logSearchText={logSearchText}
+                                setLogSearchText={setLogSearchText}
+                                logFilterCategory={logFilterCategory}
+                                setLogFilterCategory={setLogFilterCategory}
+                                filteredLogs={filteredLogs}
+                                expandedLogId={expandedLogId}
+                                setExpandedLogId={setExpandedLogId}
+                                onExportLogs={handleExportLogs}
+                                onClearLogs={handleClearLogs}
+                              />
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {/* 6. DANGER ZONE TAB */}
+                {activeTab === "danger" && (
+                  <section className="space-y-4">
+                    <SettingSectionHeader
+                      icon={<ShieldAlert size={18} className="text-red-500" />}
+                      title="Danger Zone"
+                      subtitle="Permanently clear saved curation data or perform a hard factory reset."
+                    />
+
+                    <div className="bg-red-500/[0.02] border-2 border-red-500/15 rounded-[24px] p-6 space-y-6">
+                      <div className="flex gap-4">
+                        <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-600 flex items-center justify-center shrink-0">
+                          <AlertTriangle size={24} />
+                        </div>
+                        <div>
+                          <h3 className="text-base font-extrabold font-display text-red-600 uppercase tracking-wide">
+                            Destructive Actions Area
+                          </h3>
+                          <p className="text-xs text-m3-on-surface-variant mt-1 leading-relaxed font-sans">
+                            These operations are completely irreversible. Clearing library elements will delete all saved Instagram bookmarks, notes, classifications, and cached thumbnails. We strongly recommend downloading a JSON backup file first.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Required confirmation checkboxes */}
+                      <div className="p-4 bg-red-500/[0.04] border border-red-500/10 rounded-2xl space-y-3.5">
+                        <label className="flex items-start gap-3 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={dangerCheck1}
+                            onChange={(e) => setDangerCheck1(e.target.checked)}
+                            className="mt-1 rounded border-red-500/30 text-red-600 focus:ring-red-500 cursor-pointer"
+                          />
+                          <span className="text-[11px] font-semibold text-m3-on-surface-variant leading-relaxed font-sans">
+                            I understand that resetting my library will permanently delete all saved posts and custom collections.
+                          </span>
+                        </label>
+
+                        <label className="flex items-start gap-3 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={dangerCheck2}
+                            onChange={(e) => setDangerCheck2(e.target.checked)}
+                            className="mt-1 rounded border-red-500/30 text-red-600 focus:ring-red-500 cursor-pointer"
+                          />
+                          <span className="text-[11px] font-semibold text-m3-on-surface-variant leading-relaxed font-sans">
+                            I confirm that I have backed up my data if I need it, and want to perform a factory reset.
+                          </span>
+                        </label>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                        <button
+                          type="button"
+                          disabled={!dangerCheck1 || !dangerCheck2}
+                          onClick={() => {
+                            triggerVibration("warning");
+                            setShowConfirmClear(true);
+                          }}
+                          className={`flex-1 py-3 px-4 rounded-xl text-xs font-bold text-center transition-all cursor-pointer select-none flex items-center justify-center gap-2 font-sans ${
+                            dangerCheck1 && dangerCheck2
+                              ? "bg-red-600 hover:bg-red-700 text-white shadow-sm active:scale-95"
+                              : "bg-m3-outline-variant/30 text-m3-on-surface-variant cursor-not-allowed"
+                          }`}
+                        >
+                          <Trash2 size={14} />
+                          <span>Reset Library Data</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={!dangerCheck1 || !dangerCheck2}
+                          onClick={() => {
+                            triggerVibration("warning");
+                            setShowConfirmClearAll(true);
+                          }}
+                          className={`flex-1 py-3 px-4 rounded-xl text-xs font-bold text-center transition-all cursor-pointer select-none flex items-center justify-center gap-2 font-sans ${
+                            dangerCheck1 && dangerCheck2
+                              ? "bg-red-700 hover:bg-red-800 text-white shadow-sm active:scale-95"
+                              : "bg-m3-outline-variant/30 text-m3-on-surface-variant cursor-not-allowed"
+                          }`}
+                        >
+                          <ShieldAlert size={14} />
+                          <span>Complete Factory Reset</span>
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </div>
-      </div>
 
 
 

@@ -26,7 +26,7 @@ export const BackupTab: React.FC<BackupTabProps> = React.memo(({
           <span>Export Complete Database Backups</span>
         </h3>
         <p className="text-xs text-m3-on-surface-variant">
-          Export your entire saved Instagram curation library into structured JSON documents for cross-device migration or CSV spreadsheets for Excel/Sheets analysis.
+          Export your Instagram library as JSON or CSV files.
         </p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
@@ -63,14 +63,14 @@ export const BackupTab: React.FC<BackupTabProps> = React.memo(({
           <span>Danger Zone: Client Storage Reset</span>
         </div>
         <p className="text-xs text-m3-on-surface-variant">
-          Clear all locally saved bookmarks and reset IndexedDB stores. These operations are irreversible unless you have previously exported a JSON backup.
+          Permanently clear saved posts and reset client stores. This action is irreversible.
         </p>
 
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-red-500/10">
           <div>
-            <h4 className="text-xs font-bold text-m3-on-surface">Reset Local Library State</h4>
+            <h4 className="text-xs font-bold text-m3-on-surface">Reset Library</h4>
             <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-              Clear saved posts or perform a complete factory reset.
+              Delete posts or perform a factory reset.
             </p>
           </div>
 
