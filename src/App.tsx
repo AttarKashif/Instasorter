@@ -15,9 +15,8 @@ import { GroupedView } from "./features/grouped/GroupedView";
 import { db } from "./lib/db";
 import { usePostStore } from "./store/useStore";
 import { Post } from "./types/post";
-import { cleanInstagramUrl } from "./lib/parser";
+import { cleanInstagramUrl, decodeInstagramText, getDynamicCoverByKeywords } from "./lib/parser";
 import { validateThumbnailUrl } from "./lib/validation";
-import { decodeInstagramText } from "./lib/parser";
 import { Toaster } from "react-hot-toast";
 import { SkeletonLoader } from "./components/ui/SkeletonLoader";
 import { OnboardingView } from "./components/ui/OnboardingView";
@@ -281,17 +280,23 @@ export default function App() {
         parseInt(lastSyncTimestamp) >= parseInt(lastImportTimestamp)
       ) {
         setPosts(
-          allPosts.map((p) => ({
-            ...p,
-            caption: decodeInstagramText(p.caption || ""),
-            creatorUsername: decodeInstagramText(p.creatorUsername || ""),
-            creatorName: p.creatorName
-              ? decodeInstagramText(p.creatorName)
-              : undefined,
-            tags: (p.tags || []).map(decodeInstagramText),
-            hashtags: (p.hashtags || []).map(decodeInstagramText),
-            collections: (p.collections || []).map(decodeInstagramText),
-          })),
+          allPosts.map((p) => {
+            const rawThumb = validateThumbnailUrl(p.thumbnailUrl || "");
+            const finalThumb = rawThumb || getDynamicCoverByKeywords(p.caption || "", p.tags || [], p.id);
+            return {
+              ...p,
+              thumbnailUrl: finalThumb,
+              thumbnailStatus: "success",
+              caption: decodeInstagramText(p.caption || ""),
+              creatorUsername: decodeInstagramText(p.creatorUsername || ""),
+              creatorName: p.creatorName
+                ? decodeInstagramText(p.creatorName)
+                : undefined,
+              tags: (p.tags || []).map(decodeInstagramText),
+              hashtags: (p.hashtags || []).map(decodeInstagramText),
+              collections: (p.collections || []).map(decodeInstagramText),
+            };
+          }),
         );
         const { runThumbnailWorker } = await import("./lib/thumbnailWorker");
         runThumbnailWorker();
@@ -331,10 +336,11 @@ export default function App() {
         const isHttp =
           finalUrl.startsWith("http://") || finalUrl.startsWith("https://");
 
-        const cleanThumbnailUrl = validateThumbnailUrl(p.thumbnailUrl || "");
-        const cleanThumbnailStatus =
-          p.thumbnailStatus ||
-          (cleanThumbnailUrl ? "success" : isHttp ? "pending" : "success");
+        let cleanThumbnailUrl = validateThumbnailUrl(p.thumbnailUrl || "");
+        if (!cleanThumbnailUrl) {
+          cleanThumbnailUrl = getDynamicCoverByKeywords(p.caption || "", p.tags || [], canonicalId);
+        }
+        const cleanThumbnailStatus = "success";
 
         const normalizedPost: Post = {
           ...p,

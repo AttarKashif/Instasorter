@@ -6,6 +6,7 @@ import {
   normalizeInstagramPost,
   normalizeInstagramPostAsync,
 } from "../../lib/parser";
+import { parseHarFile } from "../../lib/harParser";
 import {
   ImportError,
   InvalidJSONError,
@@ -40,6 +41,8 @@ import {
   FileText,
   Bookmark,
   Check,
+  Puzzle,
+  Radio,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import toast from "react-hot-toast";
@@ -154,6 +157,7 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
     const fileErrors: FailedEntryInfo[] = [];
     const failedEntries: FailedEntryInfo[] = [];
     const rawJsonContents: { fileName: string; content: string }[] = [];
+    let harExtractedPosts: any[] = [];
     let zip: JSZip | undefined = undefined;
     let totalFilesProcessed = 0;
 
@@ -208,12 +212,35 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
             file.name,
           );
         }
+      } else if (file.name.toLowerCase().endsWith(".har")) {
+        totalFilesProcessed = 1;
+        try {
+          const content = await file.text();
+          const harResult = parseHarFile(content);
+          if (harResult.posts.length === 0) {
+            throw new Error("No Instagram posts or GraphQL media entries found inside this HAR network recording. Make sure you scrolled through Instagram while DevTools was recording.");
+          }
+          harExtractedPosts = harResult.posts;
+        } catch (harErr: any) {
+          throw new ImportError(
+            `Failed to parse HAR network archive '${file.name}': ${harErr.message}`,
+            "HAR_PARSE_ERROR",
+            "Export the HAR file from your browser DevTools (Network tab -> Export HAR) while viewing Instagram.",
+            file.name,
+          );
+        }
       } else {
         throw new UnsupportedFileFormatError(file.name);
       }
 
       // 2. Safely parse JSON strings and catch InvalidJSONError per file
       const allExtractedRaws: { raw: any; fileName: string }[] = [];
+
+      if (harExtractedPosts.length > 0) {
+        harExtractedPosts.forEach((p) => {
+          allExtractedRaws.push({ raw: p, fileName: file.name });
+        });
+      }
 
       for (const item of rawJsonContents) {
         let parsed: any;
@@ -725,7 +752,7 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
               <input
                 type="file"
                 ref={fileInputRef}
-                accept=".json,.zip"
+                accept=".json,.zip,.har"
                 onChange={handleFileUpload}
                 disabled={isProcessing}
                 className="hidden"
@@ -753,11 +780,15 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
                     <span className="font-semibold font-mono text-m3-primary">
                       .json
                     </span>{" "}
-                    files, or{" "}
+                    files,{" "}
                     <span className="font-semibold font-mono text-m3-primary">
                       .zip
                     </span>{" "}
-                    archives exported directly from Meta.
+                    archives, or DevTools{" "}
+                    <span className="font-semibold font-mono text-m3-primary">
+                      .har
+                    </span>{" "}
+                    recordings.
                   </p>
                 </div>
 
@@ -772,7 +803,35 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
             </motion.div>
           )}
 
-          {/* 1-Click Direct Instagram Capture Bookmarklet (Zero proxy/rate-limit blocks) */}
+          {/* Direct Browser Extension Capture (Zero proxy/rate-limit blocks) */}
+          {!isProcessing && (
+            <div className="bg-gradient-to-br from-m3-surface-low to-m3-surface border border-m3-outline-variant/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 shrink-0">
+                  <Puzzle size={18} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-bold text-m3-on-surface font-display">Instasorter Chrome Extension</h4>
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold">100% Reliable</span>
+                  </div>
+                  <p className="text-[11px] text-m3-on-surface-variant leading-relaxed">
+                    Bypasses server rate limits completely by ingesting posts directly from your authenticated browser tab.
+                  </p>
+                </div>
+              </div>
+              <a
+                href="/api/download-extension"
+                download="instasorter-capture-extension.zip"
+                className="px-3.5 py-2 bg-m3-primary hover:bg-opacity-90 text-m3-on-primary text-xs font-bold rounded-xl transition-all cursor-pointer active:scale-95 flex items-center gap-1.5 shrink-0 self-start sm:self-auto shadow-2xs"
+              >
+                <Download size={13} />
+                <span>Download Extension ZIP</span>
+              </a>
+            </div>
+          )}
+
+          {/* 1-Click Direct Instagram Capture Bookmarklet */}
           {!isProcessing && (
             <div className="bg-gradient-to-br from-m3-surface-low to-m3-surface border border-m3-outline-variant/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
               <div className="flex items-center gap-3">
@@ -780,8 +839,8 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
                   <Bookmark size={16} />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-m3-on-surface">1-Click Live Instagram Capture</h4>
-                  <p className="text-[11px] text-m3-on-surface-variant">Extract HD media directly from open Instagram tabs with 100% reliability.</p>
+                  <h4 className="text-xs font-bold text-m3-on-surface">1-Click Live Instagram Bookmarklet</h4>
+                  <p className="text-[11px] text-m3-on-surface-variant">Extract HD media directly from open Instagram tabs without any setup.</p>
                 </div>
               </div>
               <button

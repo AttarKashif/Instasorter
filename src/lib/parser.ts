@@ -236,6 +236,11 @@ export const findAnyInstagramUrlRecursively = (obj: any): string => {
     ) {
       return trimmed;
     }
+    // Try regex matching anywhere in the string to find embedded Instagram posts/reels
+    const match = trimmed.match(/https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\/(?:p|reel|reels|tv)\/[a-zA-Z0-9_\-]+/i);
+    if (match && match[0]) {
+      return match[0];
+    }
     return "";
   }
   if (typeof obj === "object") {
@@ -442,6 +447,23 @@ export const extractOwnerDetails = (raw: any) => {
         raw.username ||
         raw.media_list_data?.[0]?.title ||
         "";
+    }
+  }
+
+  // Robust fallback: try extracting username from post/profile URL if not found or is generic/placeholdery
+  if (
+    !creatorUsername ||
+    creatorUsername.toLowerCase() === "unknown" ||
+    creatorUsername.toLowerCase() === "saved post" ||
+    creatorUsername.trim() === ""
+  ) {
+    const rawUrl = raw.postUrl || raw.url || raw.href || raw.instagramUrl || "";
+    if (rawUrl) {
+      // e.g. https://www.instagram.com/username/p/SHORTCODE/ or https://instagram.com/username/
+      const match = rawUrl.match(/instagram\.com\/([a-zA-Z0-9_\.]+)/i);
+      if (match && match[1] && !["p", "reel", "reels", "tv", "stories", "explore"].includes(match[1].toLowerCase())) {
+        creatorUsername = match[1];
+      }
     }
   }
 
@@ -808,13 +830,13 @@ export const normalizeInstagramPost = (raw: any): Post => {
   }
 
   // Guard clause: If the thumbnail url is not a valid web image (starts with http, https, or data:)
-  // then we set it to empty so the app goes to the link, downloads the image and previews it.
+  // then we immediately assign a high-fidelity, content-matched cover so the card renders cleanly
   thumbnailUrl = validateThumbnailUrl(thumbnailUrl.trim());
   if (
     !thumbnailUrl ||
     (!thumbnailUrl.startsWith("http") && !thumbnailUrl.startsWith("data:"))
   ) {
-    thumbnailUrl = "";
+    thumbnailUrl = getDynamicCoverByKeywords(caption, tags, id);
   }
 
   // 9. Extract additional slides if it's a carousel, or generate aesthetic ones if empty

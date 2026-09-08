@@ -29,17 +29,18 @@ const getInitialImgSrc = (post: Post): string => {
     ) {
       return tUrl;
     }
+
+    if (
+      tUrl.includes("cdninstagram.com") ||
+      tUrl.includes("scontent") ||
+      tUrl.includes("fbcdn")
+    ) {
+      return tUrl;
+    }
   }
 
-  if (
-    post.thumbnailUrl &&
-    (post.thumbnailUrl.includes("cdninstagram.com") ||
-      post.thumbnailUrl.includes("scontent"))
-  ) {
-    return post.thumbnailUrl;
-  }
-
-  return "";
+  // Fallback to content-matched aesthetic cover so no card is ever empty
+  return getDynamicCoverByKeywords(post.caption || "", post.tags || [], post.id);
 };
 
 const getDeterministicPalette = (id: string): string[] => {
@@ -197,10 +198,16 @@ export const InstagramImage = ({
   };
 
   const handleError = () => {
-    if (!hasFailed) {
+    const fallbackCover = getDynamicCoverByKeywords(post.caption || "", post.tags || [], post.id);
+    if (imgSrc !== fallbackCover) {
+      setImgSrc(fallbackCover);
+      setIsLoaded(true);
+      db.posts.update(post.id, { thumbnailUrl: fallbackCover, thumbnailStatus: "success" }).catch(() => {});
+      usePostStore.getState().updatePost(post.id, { thumbnailUrl: fallbackCover, thumbnailStatus: "success" });
+    } else {
       setHasFailed(true);
-      db.posts.update(post.id, { thumbnailStatus: "failed" }).catch(() => {});
-      usePostStore.getState().updatePost(post.id, { thumbnailStatus: "failed" });
+    }
+    if (!hasFailed && post.postUrl) {
       triggerHeal(true);
     }
   };
@@ -239,7 +246,7 @@ export const InstagramImage = ({
           loading="lazy"
           decoding="async"
           className={`${className} relative z-20 transition-all duration-700 ease-in-out ${
-            isLoaded ? "opacity-100 blur-0 scale-100" : "opacity-0 blur-md scale-95"
+            isLoaded ? "opacity-100 blur-0 scale-100" : "opacity-90 blur-0 scale-100"
           }`}
           onError={handleError}
           onLoad={(e) => {

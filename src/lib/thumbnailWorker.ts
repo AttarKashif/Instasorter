@@ -428,6 +428,16 @@ async function processQueue(): Promise<boolean> {
   // Multi-tier pending queue calculation
   const pendingPosts = allPostsInDb.filter((p) => {
     if (p.thumbnailStatus === "pending" || !p.thumbnailStatus) {
+      // Exponential Backoff Check:
+      // If the post has failed attempts, delay its next retry exponentially to respect rate limits.
+      // 5 seconds * 2^(attempts - 1) up to a max of 1 hour (3600000 ms)
+      if (p.thumbnailAttempts && p.thumbnailAttempts > 0 && p.lastThumbnailAttempt) {
+        const lastAttemptTime = new Date(p.lastThumbnailAttempt).getTime();
+        const backoffDelay = Math.min(5000 * Math.pow(2, p.thumbnailAttempts - 1), 3600000);
+        if (now - lastAttemptTime < backoffDelay) {
+          return false; // Skip this post for now, still in backoff cool-down
+        }
+      }
       return true;
     }
     // Cache invalidation: re-scrape if saved and cached older than 30 days
@@ -603,6 +613,10 @@ async function fetchThumbnailForPostInternal(post: Post) {
         visibility: "visible",
       };
 
+      if (data.phash) {
+        updatedPost.phash = data.phash;
+      }
+
       if (data.additionalSlides && data.additionalSlides.length > 0) {
         updatedPost.additionalSlides = data.additionalSlides;
       }
@@ -617,6 +631,30 @@ async function fetchThumbnailForPostInternal(post: Post) {
         updatedPost.creatorUsername = data.creatorUsername;
       }
 
+      // Populate scraped fallback caption if current caption is empty
+      if (
+        data.caption &&
+        (!post.caption || post.caption.trim() === "")
+      ) {
+        updatedPost.caption = data.caption;
+      }
+
+      // Populate scraped fallback hashtags if current hashtags list is empty
+      if (
+        Array.isArray(data.hashtags) &&
+        data.hashtags.length > 0 &&
+        (!post.hashtags || post.hashtags.length === 0)
+      ) {
+        updatedPost.hashtags = data.hashtags;
+      } else if (updatedPost.caption && (!post.hashtags || post.hashtags.length === 0)) {
+        // Extract hashtags from the caption if we just got a caption but have no hashtags
+        const hashtagRegex = /#([\p{L}\p{N}_]+)/gu;
+        const matches = [...updatedPost.caption.matchAll(hashtagRegex)].map((m) => m[1]);
+        if (matches.length > 0) {
+          updatedPost.hashtags = Array.from(new Set(matches));
+        }
+      }
+
       if (data.dataUrl) {
         try {
           fetch(data.dataUrl).then(r => r.blob()).then(blob => {
@@ -629,8 +667,9 @@ async function fetchThumbnailForPostInternal(post: Post) {
       usePostStore.getState().updatePost(post.id, updatedPost);
     } else {
       totalFailures++;
+      const isPendingRetry = attempts < MAX_RETRIES;
       const updatedPost: Partial<Post> = {
-        thumbnailStatus: "failed",
+        thumbnailStatus: isPendingRetry ? "pending" : "failed",
         thumbnailAttempts: attempts,
         lastThumbnailAttempt: new Date(),
         visibility: "visible",
@@ -642,8 +681,9 @@ async function fetchThumbnailForPostInternal(post: Post) {
   } catch (error: any) {
     clearTimeout(timeoutId);
     totalFailures++;
+    const isPendingRetry = attempts < MAX_RETRIES;
     const updatedPost: Partial<Post> = {
-      thumbnailStatus: "failed",
+      thumbnailStatus: isPendingRetry ? "pending" : "failed",
       thumbnailAttempts: attempts,
       lastThumbnailAttempt: new Date(),
       visibility: "visible",

@@ -33,6 +33,7 @@ export interface Post {
   colorPalette?: string[];
   additionalSlides?: string[];
   mediaCount?: number;
+  phash?: string; // 64-bit perceptual difference hash (dHash) for duplicate detection
   instagramLikes?: number;
   location?: string;
   comments?: {

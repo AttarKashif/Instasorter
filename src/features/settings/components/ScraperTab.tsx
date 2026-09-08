@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Shield, Key, RefreshCw, Terminal, CheckCircle2, AlertCircle, Cpu, Globe, HelpCircle, Bookmark, Copy, Check } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Shield, Key, RefreshCw, Terminal, CheckCircle2, AlertCircle, Cpu, Globe, HelpCircle, Bookmark, Copy, Check, Download, Puzzle, Activity, Layers } from "lucide-react";
 import { triggerVibration } from "../../../lib/vibrate";
 
 interface ScraperTabProps {
@@ -47,6 +47,27 @@ export const ScraperTab: React.FC<ScraperTabProps> = React.memo(({
   const [sessionCheckResult, setSessionCheckResult] = useState<{ success: boolean; authenticated?: boolean; message: string } | null>(null);
   const [showCookieGuide, setShowCookieGuide] = useState(false);
   const [copiedBookmarklet, setCopiedBookmarklet] = useState(false);
+  const [poolStats, setPoolStats] = useState<any | null>(null);
+  const [loadingPoolStats, setLoadingPoolStats] = useState(false);
+
+  const fetchPoolStats = async () => {
+    setLoadingPoolStats(true);
+    try {
+      const res = await fetch("/api/scraper-pool-stats");
+      if (res.ok) {
+        const data = await res.json();
+        setPoolStats(data);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch scraper pool stats", e);
+    } finally {
+      setLoadingPoolStats(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPoolStats();
+  }, []);
 
   const handleTestSession = async () => {
     setCheckingSession(true);
@@ -83,48 +104,134 @@ export const ScraperTab: React.FC<ScraperTabProps> = React.memo(({
 
   return (
     <div className="space-y-6">
-      {/* 1-Click Instagram Bookmarklet Helper Card */}
-      <div className="bg-gradient-to-br from-m3-surface-low to-m3-surface border border-m3-outline-variant/30 rounded-[20px] p-6 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary">
-              <Bookmark size={18} />
+      {/* 1-Click Chrome Extension & Bookmarklet Capture Helpers */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Chrome Extension Download Card */}
+        <div className="bg-gradient-to-br from-m3-surface-low to-m3-surface border border-m3-outline-variant/30 rounded-[20px] p-5 shadow-xs flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
+                <Puzzle size={18} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-m3-on-surface">
+                    Browser Extension
+                  </h3>
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold">Recommended</span>
+                </div>
+                <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+                  Direct capture from Chrome or Brave with zero proxy blocks or rate limits.
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-m3-on-surface">
-                1-Click Instagram Post Capture Bookmarklet (100% Success Rate)
-              </h3>
-              <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-                Zero proxy blocks &amp; zero rate-limits. Extract high-res media directly while browsing Instagram.
-              </p>
+            <p className="text-[10px] text-m3-on-surface-variant leading-relaxed">
+              Unpack this extension and load it into <code className="font-mono text-m3-primary font-bold">chrome://extensions</code>. Posts you view on Instagram stream directly into your local database.
+            </p>
+          </div>
+          <a
+            href="/api/download-extension"
+            download="instasorter-capture-extension.zip"
+            className="w-full py-2 bg-m3-primary hover:bg-opacity-95 text-m3-on-primary font-bold text-xs rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-2xs"
+          >
+            <Download size={13} />
+            <span>Download Extension (.ZIP)</span>
+          </a>
+        </div>
+
+        {/* 1-Click Instagram Bookmarklet Card */}
+        <div className="bg-gradient-to-br from-m3-surface-low to-m3-surface border border-m3-outline-variant/30 rounded-[20px] p-5 shadow-xs flex flex-col justify-between space-y-4">
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-m3-primary/10 text-m3-primary">
+                <Bookmark size={18} />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-m3-on-surface">
+                  Capture Bookmarklet
+                </h3>
+                <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
+                  1-Click copy metadata script for any browser bookmark bar.
+                </p>
+              </div>
             </div>
+            <p className="text-[10px] text-m3-on-surface-variant leading-relaxed">
+              Save this script as a bookmark. When viewing any post or reel on Instagram, click it to instantly copy formatted metadata to your clipboard.
+            </p>
           </div>
           <button
             type="button"
             onClick={copyBookmarklet}
-            className="px-4 py-2 bg-m3-surface border border-m3-outline-variant/40 hover:border-m3-primary text-m3-on-surface font-bold text-xs rounded-xl transition-all cursor-pointer active:scale-95 flex items-center gap-2"
+            className="w-full py-2 bg-m3-surface border border-m3-outline-variant/40 hover:border-m3-primary text-m3-on-surface font-bold text-xs rounded-xl transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-2xs"
           >
             {copiedBookmarklet ? (
               <>
-                <Check size={14} className="text-emerald-500" />
+                <Check size={13} className="text-emerald-500" />
                 <span className="text-emerald-600 font-bold">Copied to Clipboard!</span>
               </>
             ) : (
               <>
-                <Copy size={14} />
+                <Copy size={13} />
                 <span>Copy Bookmarklet Script</span>
               </>
             )}
           </button>
         </div>
-
-        <div className="p-3 bg-m3-surface-container rounded-xl text-[11px] text-m3-on-surface-variant leading-relaxed">
-          <span className="font-bold text-m3-on-surface block mb-1">How to use:</span>
-          Create a new bookmark in your browser with any name (e.g. <span className="font-mono font-bold text-m3-primary">"Capture to Instasorter"</span>) and paste this script as the URL. Whenever you view any post or reel on Instagram, click the bookmark to copy its full HD metadata instantly!
-        </div>
       </div>
 
-      {/* Scraper Credentials & Proxy Config */}
+      {/* Live Scraper Pool & Circuit Breaker Telemetry Dashboard */}
+      <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity size={15} className="text-m3-primary" />
+            <h3 className="text-xs font-bold uppercase tracking-wider text-m3-on-surface">
+              Scraper Engine Pool &amp; Circuit Breakers
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={fetchPoolStats}
+            disabled={loadingPoolStats}
+            className="px-2.5 py-1 text-[11px] bg-m3-surface hover:bg-m3-surface-container border border-m3-outline-variant/40 rounded-lg text-m3-on-surface flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={loadingPoolStats ? "animate-spin" : ""} />
+            <span>Refresh Stats</span>
+          </button>
+        </div>
+
+        {poolStats && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 bg-m3-surface rounded-xl border border-m3-outline-variant/30">
+              <span className="text-[10px] text-m3-on-surface-variant font-bold uppercase block">Active Sessions</span>
+              <span className="text-base font-bold font-mono text-m3-on-surface">
+                {poolStats.activeSessionsCount ?? 0}
+              </span>
+            </div>
+            <div className="p-3 bg-m3-surface rounded-xl border border-m3-outline-variant/30">
+              <span className="text-[10px] text-m3-on-surface-variant font-bold uppercase block">Proxy Pool</span>
+              <span className="text-base font-bold font-mono text-m3-on-surface">
+                {poolStats.proxyPoolCount ?? 0}
+              </span>
+            </div>
+            <div className="p-3 bg-m3-surface rounded-xl border border-m3-outline-variant/30">
+              <span className="text-[10px] text-m3-on-surface-variant font-bold uppercase block">Background Queue</span>
+              <span className="text-base font-bold font-mono text-m3-on-surface">
+                {poolStats.serverQueueLength ?? 0}
+              </span>
+            </div>
+            <div className="p-3 bg-m3-surface rounded-xl border border-m3-outline-variant/30">
+              <span className="text-[10px] text-m3-on-surface-variant font-bold uppercase block">Tripped Breakers</span>
+              <span className={`text-base font-bold font-mono ${
+                (poolStats.circuitBreakersTripped || 0) > 0 ? "text-amber-500" : "text-emerald-600"
+              }`}>
+                {poolStats.circuitBreakersTripped ?? 0}
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Scraper Credentials & Proxy Pool Configuration */}
       <div className="bg-m3-surface-low border border-m3-outline-variant/25 rounded-[20px] p-6 shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-m3-outline-variant/20">
           <div>
@@ -133,7 +240,7 @@ export const ScraperTab: React.FC<ScraperTabProps> = React.memo(({
               <span>Instagram Authenticated Scraping Setup</span>
             </h3>
             <p className="text-[11px] text-m3-on-surface-variant mt-0.5">
-              Set up optional local browser-stored credentials and secure proxies to ensure stable downloading.
+              Configure session cookies and proxy pools for automated round-robin rotation and resilience.
             </p>
           </div>
           {throttleStatus.throttled && (
@@ -202,29 +309,35 @@ export const ScraperTab: React.FC<ScraperTabProps> = React.memo(({
             />
           </div>
 
-          <div>
-            <label className="block text-[11px] font-bold text-m3-on-surface-variant mb-1">
-              Session Cookie (sessionid)
-            </label>
-            <input
-              type="text"
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[11px] font-bold text-m3-on-surface-variant">
+                Session Cookie(s) (sessionid)
+              </label>
+              <span className="text-[10px] text-m3-on-surface-variant">Supports multiple cookies (comma or newline separated)</span>
+            </div>
+            <textarea
+              rows={2}
               value={scrapingSession}
               onChange={(e) => setScrapingSession(e.target.value)}
-              placeholder="e.g. 5241893%3AF9z..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-mono text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary"
+              placeholder="e.g. 5241893%3AF9z... (separate multiple sessions with newlines or commas for pool rotation)"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-mono text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary resize-y"
             />
           </div>
 
-          <div>
-            <label className="block text-[11px] font-bold text-m3-on-surface-variant mb-1">
-              Connection Proxy (HTTP/SOCKS5)
-            </label>
-            <input
-              type="text"
+          <div className="sm:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[11px] font-bold text-m3-on-surface-variant">
+                Connection Proxy Pool (HTTP/SOCKS5)
+              </label>
+              <span className="text-[10px] text-m3-on-surface-variant">Supports multiple proxies (comma or newline separated)</span>
+            </div>
+            <textarea
+              rows={2}
               value={scrapingProxy}
               onChange={(e) => setScrapingProxy(e.target.value)}
-              placeholder="e.g. http://proxy.example.com:8080"
-              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-mono text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary"
+              placeholder="e.g. http://proxy1.example.com:8080 (separate multiple proxies with newlines or commas for round-robin rotation)"
+              className="w-full px-3.5 py-2.5 rounded-xl bg-m3-surface border border-m3-outline-variant/30 text-xs font-mono text-m3-on-surface focus:outline-none focus:ring-1 focus:ring-m3-primary resize-y"
             />
           </div>
         </div>

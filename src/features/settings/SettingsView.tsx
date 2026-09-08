@@ -389,7 +389,7 @@ export const SettingsView = React.memo(
       }
     };
 
-    const handleAnalyzeDuplicates = () => {
+    const handleAnalyzeDuplicates = async () => {
       const seen = new Set<string>();
       let dupCount = 0;
       posts.forEach((p) => {
@@ -399,10 +399,38 @@ export const SettingsView = React.memo(
           seen.add(p.id);
         }
       });
-      if (dupCount > 0) {
-        toast.success(`Scan complete: Found ${dupCount} duplicate record${dupCount > 1 ? "s" : ""}.`);
+
+      // Visual Perceptual Hash Duplicate Detection via /api/find-duplicates
+      const postsWithHash = posts.filter((p) => p.phash && p.phash.length > 0);
+      let visualDupeGroups = 0;
+
+      if (postsWithHash.length >= 2) {
+        try {
+          const res = await fetch("/api/find-duplicates", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              items: postsWithHash.map((p) => ({ id: p.id, phash: p.phash })),
+              maxDistance: 8,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && data.duplicates) {
+              visualDupeGroups = Object.keys(data.duplicates).length;
+            }
+          }
+        } catch (e) {
+          console.warn("Visual duplicate scan error:", e);
+        }
+      }
+
+      if (dupCount > 0 || visualDupeGroups > 0) {
+        toast.success(
+          `Scan complete: Found ${dupCount} exact duplicate${dupCount === 1 ? "" : "s"} and ${visualDupeGroups} visual clone group${visualDupeGroups === 1 ? "" : "s"}.`
+        );
       } else {
-        toast.success("Scan complete: No duplicate records found in local database.");
+        toast.success("Scan complete: No duplicate records or visual clones found in local database.");
       }
     };
 

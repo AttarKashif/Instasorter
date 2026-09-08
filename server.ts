@@ -4,8 +4,22 @@ import fs from "fs";
 import { execFile } from "child_process";
 import dotenv from "dotenv";
 dotenv.config();
+import { snapsave } from "snapsave-media-downloader";
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+import {
+  sessionPool,
+  getMobileApiHeaders,
+  getRandomWebHeaders,
+  updateWwwClaimFromHeaders,
+  computeDHash,
+  calculateHammingDistance,
+  shortcodeToMediaId,
+  detectInstagramCheckpoint,
+  calculateJitteredBackoff,
+  getProxyConfig
+} from "./server/scraperEngine";
+import { generateExtensionZip } from "./server/extensionBridge";
 
 const app = express();
 const PORT = 3000;
@@ -53,83 +67,168 @@ async function runInstaloaderExtraction(shortcodeOrUrl: string): Promise<any> {
 }
 
 // Convert Instagram shortcode to numerical Media ID
-function shortcodeToMediaId(shortcode: string): string {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-  let id = BigInt(0);
-  for (let i = 0; i < shortcode.length; i++) {
-    const char = shortcode[i];
-    const index = alphabet.indexOf(char);
-    if (index === -1) continue;
-    id = id * BigInt(64) + BigInt(index);
-  }
-  return id.toString();
-}
+// (shortcodeToMediaId is provided by ./server/scraperEngine)
 
-// ahmedrangel/instagram-media-scraper Direct GraphQL & __d=dis Engine
+// Enhanced Instagram Media Scraper Direct Mobile API & GraphQL Engine
 async function runAhmedRangelScraper(shortcode: string): Promise<any> {
-  // Load config for session cookies
-  const configPath = path.join(process.cwd(), "scripts", "scraping_config.json");
-  let sessionCookie = "";
-  let username = "";
-  if (fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      sessionCookie = config.session_cookie || "";
-      username = config.username || "";
-    } catch (e) {}
-  }
+  const activeSession = sessionPool.getActiveCookie();
+  const sessionCookie = activeSession?.cookie || "";
+  const username = activeSession?.username || "";
+  const cookieHeader = sessionCookie ? `sessionid=${sessionCookie}; csrftoken=missing${username ? `; ds_user_id=${username}` : ''}` : undefined;
 
-  // Dynamic User-Agent and App ID Rotation
-  const customHeaders: Record<string, string> = {
-    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-    'X-IG-App-ID': '936619743392459',
-    'X-ASBD-ID': '198387',
-    'X-IG-WWW-Claim': '0',
-    'Accept': '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Sec-Fetch-Mode': 'cors',
-    'Sec-Fetch-Site': 'same-origin',
-  };
+  const mobileHeaders = getMobileApiHeaders(cookieHeader);
+  const webHeaders = getRandomWebHeaders(`https://www.instagram.com/p/${shortcode}/`, cookieHeader);
 
-  // Inject active Session Cookie to direct backend queries
-  if (sessionCookie) {
-    customHeaders['Cookie'] = `sessionid=${sessionCookie}; csrftoken=missing${username ? `; ds_user_id=${username}` : ''}`;
-  }
-
-  // Fallback 1: Direct Mobile API Info Query using translated Media ID
+  // Strategy 1: Direct Mobile API Info Query using translated Media ID
   try {
     const mediaId = shortcodeToMediaId(shortcode);
     const urlInfo = `https://i.instagram.com/api/v1/media/${mediaId}/info/`;
-    console.log(`[AhmedRangel Scraper Engine] Trying api/v1/media/info/ for ID: ${mediaId}`);
-    const resInfo = await fetchWithTimeout(urlInfo, { headers: customHeaders }, 2500);
+    console.log(`[Media Scraper Engine] Trying api/v1/media/info/ for ID: ${mediaId}`);
+    const resInfo = await fetchWithTimeout(urlInfo, { headers: mobileHeaders }, 3000);
+    
+    updateWwwClaimFromHeaders(resInfo.headers);
+
     if (resInfo.ok) {
-      const json = await resInfo.ok ? await resInfo.json() : null;
-      const items = json?.items;
-      if (items && items.length > 0) {
-        const item = items[0];
-        const displayUrl = item.image_versions2?.candidates?.[0]?.url || item.display_url;
-        const caption = item.caption?.text || "";
-        const ownerUsername = item.user?.username;
+      const json = await resInfo.json();
+      const cpCheck = detectInstagramCheckpoint(json, resInfo.status);
+      if (cpCheck.isCheckpoint) {
+        sessionPool.recordResult(sessionCookie, false, cpCheck.reason);
+      } else {
+        sessionPool.recordResult(sessionCookie, true);
+        const items = json?.items;
+        if (items && items.length > 0) {
+          const item = items[0];
+          const displayUrl = item.image_versions2?.candidates?.[0]?.url || item.display_url;
+          const caption = item.caption?.text || "";
+          const ownerUsername = item.user?.username;
+          
+          // Extract all carousel slides if present
+          const slides: string[] = [];
+          if (Array.isArray(item.carousel_media)) {
+            for (const slide of item.carousel_media) {
+              const sUrl = slide.image_versions2?.candidates?.[0]?.url;
+              if (sUrl && !slides.includes(sUrl)) slides.push(cleanImageUrl(sUrl));
+            }
+          }
+
+          if (displayUrl) {
+            return {
+              success: true,
+              displayUrl: cleanImageUrl(displayUrl),
+              caption,
+              ownerUsername,
+              slides: slides.length > 0 ? slides : undefined,
+              mediaType: item.carousel_media ? 'carousel' : (item.media_type === 2 || item.is_video ? 'video' : 'image'),
+              strategy: "Instagram Mobile api/v1/media/info"
+            };
+          }
+        }
+      }
+    } else {
+      if (resInfo.status === 401 || resInfo.status === 403) {
+        sessionPool.recordResult(sessionCookie, false, `HTTP ${resInfo.status}`);
+      }
+    }
+  } catch (err: any) {
+    console.log(`[Media Scraper Engine] Strategy 1 api/v1/media/info bypassed: ${err.message}`);
+  }
+
+  // Strategy 2: Polaris doc_id GraphQL Query (Modern Web query used by Instagram 2024-2025)
+  try {
+    const docIdUrl = `https://www.instagram.com/graphql/query/?doc_id=8845758582119845&variables=${encodeURIComponent(JSON.stringify({ shortcode }))}`;
+    console.log(`[Media Scraper Engine] Trying Polaris GraphQL doc_id for shortcode: ${shortcode}`);
+    const resDoc = await fetchWithTimeout(docIdUrl, { headers: webHeaders }, 3000);
+    updateWwwClaimFromHeaders(resDoc.headers);
+
+    if (resDoc.ok) {
+      const json = await resDoc.json();
+      const media = json?.data?.xdt_shortcode_media || json?.data?.shortcode_media;
+      if (media) {
+        const displayUrl = media.display_url;
+        const caption = media.edge_media_to_caption?.edges?.[0]?.node?.text || "";
+        const username = media.owner?.username;
+
+        const slides: string[] = [];
+        if (Array.isArray(media.edge_sidecar_to_children?.edges)) {
+          for (const edge of media.edge_sidecar_to_children.edges) {
+            const sUrl = edge?.node?.display_url;
+            if (sUrl && !slides.includes(sUrl)) slides.push(cleanImageUrl(sUrl));
+          }
+        }
+
         if (displayUrl) {
+          sessionPool.recordResult(sessionCookie, true);
           return {
             success: true,
             displayUrl: cleanImageUrl(displayUrl),
             caption,
-            ownerUsername,
-            mediaType: item.media_type === 2 || item.is_video ? 'video' : 'image',
-            strategy: "Instagram Mobile api/v1/media/info"
+            ownerUsername: username,
+            slides: slides.length > 0 ? slides : undefined,
+            mediaType: slides.length > 0 ? 'carousel' : (media.is_video ? 'video' : 'image'),
+            strategy: "Instagram Polaris GraphQL doc_id:8845758582119845"
           };
         }
       }
     }
   } catch (err: any) {
-    console.log(`[AhmedRangel Scraper Engine] Fallback 1 api/v1/media/info bypassed: ${err.message}`);
+    console.log(`[Media Scraper Engine] Strategy 2 Polaris doc_id bypassed: ${err.message}`);
   }
 
-  // Fallback 2: Standard ?__a=1&__d=dis query
+  // Strategy 3: GraphQL Query with rotating query hashes
+  const queryHashes = [
+    "b301662c8009741142a760f6222b406e", // Standard shortcode media
+    "9f88d4d7a74160a390fb2403614095ae", // Alternative media hash
+    "003056d32c2554def87228bc3d96687a"  // Sidecar hash
+  ];
+
+  for (const qHash of queryHashes) {
+    try {
+      const variables = JSON.stringify({ shortcode, child_comment_count: 3, fetch_comment_count: 4, parent_comment_count: 2, has_threaded_comments: true });
+      const gqlUrl = `https://www.instagram.com/graphql/query/?query_hash=${qHash}&variables=${encodeURIComponent(variables)}`;
+      const resGql = await fetchWithTimeout(gqlUrl, { headers: webHeaders }, 2500);
+      updateWwwClaimFromHeaders(resGql.headers);
+
+      if (resGql.ok) {
+        const json = await resGql.json();
+        const media = json?.data?.shortcode_media;
+        if (media) {
+          const displayUrl = media.display_url;
+          const caption = media.edge_media_to_caption?.edges?.[0]?.node?.text || "";
+          const username = media.owner?.username;
+
+          const slides: string[] = [];
+          if (Array.isArray(media.edge_sidecar_to_children?.edges)) {
+            for (const edge of media.edge_sidecar_to_children.edges) {
+              const sUrl = edge?.node?.display_url;
+              if (sUrl && !slides.includes(sUrl)) slides.push(cleanImageUrl(sUrl));
+            }
+          }
+
+          if (displayUrl) {
+            sessionPool.recordResult(sessionCookie, true);
+            return {
+              success: true,
+              displayUrl: cleanImageUrl(displayUrl),
+              caption,
+              ownerUsername: username,
+              slides: slides.length > 0 ? slides : undefined,
+              mediaType: slides.length > 0 ? 'carousel' : (media.is_video ? 'video' : 'image'),
+              strategy: `Instagram GraphQL query_hash=${qHash}`
+            };
+          }
+        }
+      }
+    } catch (err: any) {
+      console.log(`[Media Scraper Engine] Strategy 3 GQL ${qHash} bypassed: ${err.message}`);
+    }
+  }
+
+  // Strategy 4: Standard ?__a=1&__d=dis query
   try {
     const urlDis = `https://www.instagram.com/p/${shortcode}/?__a=1&__d=dis`;
-    const resDis = await fetchWithTimeout(urlDis, { headers: customHeaders }, 2500);
+    const resDis = await fetchWithTimeout(urlDis, { headers: webHeaders }, 2500);
+    updateWwwClaimFromHeaders(resDis.headers);
+
     if (resDis.ok) {
       const json = await resDis.json();
       const items = json?.items || json?.graphql?.shortcode_media;
@@ -139,6 +238,7 @@ async function runAhmedRangelScraper(shortcode: string): Promise<any> {
         const caption = item.caption?.text || item.edge_media_to_caption?.edges?.[0]?.node?.text || "";
         const username = item.user?.username || item.owner?.username;
         if (displayUrl) {
+          sessionPool.recordResult(sessionCookie, true);
           return {
             success: true,
             displayUrl: cleanImageUrl(displayUrl),
@@ -151,45 +251,37 @@ async function runAhmedRangelScraper(shortcode: string): Promise<any> {
       }
     }
   } catch (err: any) {
-    console.log(`[AhmedRangel Scraper Engine] Fallback 2 __d=dis bypassed: ${err.message}`);
+    console.log(`[Media Scraper Engine] Strategy 4 __d=dis bypassed: ${err.message}`);
   }
 
-  // Fallback 3: GraphQL Query with rotating query hashes
-  const queryHashes = [
-    "b301662c8009741142a760f6222b406e", // Standard shortcode media
-    "9f88d4d7a74160a390fb2403614095ae"  // Alternative stories/media hash
-  ];
+  // Strategy 5: Public captioned embed extraction
+  try {
+    const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
+    const resEmbed = await fetchWithTimeout(embedUrl, { headers: webHeaders }, 2500);
+    if (resEmbed.ok) {
+      const html = await resEmbed.text();
+      const ogMatch = html.match(/class=["']EmbeddedMediaImage["'][^>]*src=["']([^"']+)["']/i) ||
+                      html.match(/<img[^>]*class=["'][^"']*EmbeddedMediaImage[^"']*["'][^>]*src=["']([^"']+)["']/i);
+      const capMatch = html.match(/class=["']CaptionComments["'][^>]*>([^<]+)</i) ||
+                       html.match(/class=["']Caption["'][^>]*>([^<]+)</i);
+      const authMatch = html.match(/class=["']Username["'][^>]*>([^<]+)</i);
 
-  for (const qHash of queryHashes) {
-    try {
-      const variables = JSON.stringify({ shortcode, child_comment_count: 3, fetch_comment_count: 4, parent_comment_count: 2, has_threaded_comments: true });
-      const gqlUrl = `https://www.instagram.com/graphql/query/?query_hash=${qHash}&variables=${encodeURIComponent(variables)}`;
-      const resGql = await fetchWithTimeout(gqlUrl, { headers: customHeaders }, 2500);
-      if (resGql.ok) {
-        const json = await resGql.json();
-        const media = json?.data?.shortcode_media;
-        if (media) {
-          const displayUrl = media.display_url;
-          const caption = media.edge_media_to_caption?.edges?.[0]?.node?.text || "";
-          const username = media.owner?.username;
-          if (displayUrl) {
-            return {
-              success: true,
-              displayUrl: cleanImageUrl(displayUrl),
-              caption,
-              ownerUsername: username,
-              mediaType: media.is_video ? 'video' : 'image',
-              strategy: `Instagram GraphQL query_hash=${qHash}`
-            };
-          }
-        }
+      if (ogMatch && ogMatch[1]) {
+        return {
+          success: true,
+          displayUrl: cleanImageUrl(ogMatch[1].replace(/&amp;/g, '&')),
+          caption: capMatch ? capMatch[1].trim() : "",
+          ownerUsername: authMatch ? authMatch[1].trim() : undefined,
+          mediaType: "image",
+          strategy: "Instagram Captioned Embed Page"
+        };
       }
-    } catch (err: any) {
-      console.log(`[AhmedRangel Scraper Engine] Fallback 3 GQL ${qHash} bypassed: ${err.message}`);
     }
+  } catch (err: any) {
+    console.log(`[Media Scraper Engine] Strategy 5 Embed bypassed: ${err.message}`);
   }
 
-  return { success: false, error: "ahmedrangel/instagram-media-scraper pipeline found no media." };
+  return { success: false, error: "Direct scraper pipeline found no accessible media." };
 }
 
 // Lazy-loaded Gemini client with validity tracking
@@ -431,7 +523,6 @@ function getRandomHeaders(referer?: string) {
     'User-Agent': ua,
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
     'Sec-CH-UA': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
     'Sec-CH-UA-Mobile': isMobile ? '?1' : '?0',
     'Sec-CH-UA-Platform': platform,
@@ -733,7 +824,8 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
         
         await fs.promises.writeFile(absolutePathJpg, safeBuffer);
         const duration = Date.now() - startTime;
-        console.log(`[Thumbnail Scraper] [Strategy 1 SUCCESS] High-res JPG saved in ${duration}ms!`);
+        const phash = computeDHash(safeBuffer);
+        console.log(`[Thumbnail Scraper] [Strategy 1 SUCCESS] High-res JPG saved in ${duration}ms! (pHash: ${phash})`);
         
         return {
           success: true,
@@ -742,12 +834,78 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
           strategyUsed: "Instagram Direct Media CDN Endpoint (/media/?size=l)",
           duration,
           httpStatus: 200,
+          phash,
           creatorUsername: usernameFromUrl || undefined
         };
       }
     }
   } catch (err: any) {
     console.log(`[Thumbnail Scraper] [Strategy 1 Bypassed]: ${err.message || err}`);
+  }
+
+  // -----------------------------------------------------------------
+  // STRATEGY 1.5: Snapsave Media Downloader Node Engine (High Success, Zero-Session)
+  // -----------------------------------------------------------------
+  try {
+    console.log(`[Thumbnail Scraper] [Strategy 1.5] Trying Snapsave Media Downloader for post: ${postUrl}`);
+    const snapRes = await snapsave(postUrl);
+    if (snapRes && snapRes.success && Array.isArray(snapRes.data?.media) && snapRes.data.media.length > 0) {
+      const firstMedia = snapRes.data.media[0];
+      const displayUrl = firstMedia.url;
+      if (displayUrl) {
+        console.log(`[Thumbnail Scraper] [Strategy 1.5 SUCCESS] Snapsave extracted media URL: ${displayUrl}`);
+        const imgRes = await fetchWithTimeout(displayUrl, { headers: getRandomHeaders(displayUrl) }, 5000);
+        if (imgRes.ok) {
+          const safeBuffer = Buffer.from(await imgRes.arrayBuffer());
+          if (isValidImageBuffer(safeBuffer)) {
+            const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
+            const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
+            if (fs.existsSync(absolutePathSvg)) {
+              try { await fs.promises.unlink(absolutePathSvg); } catch (e) {}
+            }
+            await fs.promises.writeFile(absolutePathJpg, safeBuffer);
+            const duration = Date.now() - startTime;
+            const phash = computeDHash(safeBuffer);
+
+            // Extract additional slides for carousel if present
+            const slides = snapRes.data.media;
+            if (slides.length > 1) {
+              for (let i = 1; i < Math.min(slides.length, 10); i++) {
+                const slideUrl = slides[i].url;
+                if (!slideUrl) continue;
+                const slidePath = path.join(THUMBNAILS_DIR, `${postId}_${i}.jpg`);
+                const slideRelativePath = `/thumbnails/${postId}_${i}.jpg`;
+                try {
+                  const sRes = await fetchWithTimeout(slideUrl, { headers: getRandomHeaders(slideUrl) }, 3000);
+                  if (sRes.ok) {
+                    const sBuf = Buffer.from(await sRes.arrayBuffer());
+                    if (isValidImageBuffer(sBuf)) {
+                      await fs.promises.writeFile(slidePath, sBuf);
+                      additionalSlides.push(slideRelativePath);
+                    }
+                  }
+                } catch (e) {}
+              }
+            }
+
+            console.log(`[Thumbnail Scraper] [Strategy 1.5 SUCCESS] Snapsave thumbnail saved in ${duration}ms! (pHash: ${phash})`);
+            return {
+              success: true,
+              path: `/thumbnails/${postId}.jpg`,
+              dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
+              strategyUsed: "Snapsave Media Downloader Node Engine",
+              duration,
+              httpStatus: 200,
+              phash,
+              creatorUsername: usernameFromUrl || undefined,
+              additionalSlides: additionalSlides.length > 0 ? additionalSlides : undefined
+            };
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.log(`[Thumbnail Scraper] [Strategy 1.5 Bypassed/Failed]: ${err.message || err}`);
   }
 
   // -----------------------------------------------------------------
@@ -769,7 +927,8 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
           }
           await fs.promises.writeFile(absolutePathJpg, safeBuffer);
           const duration = Date.now() - startTime;
-          console.log(`[Thumbnail Scraper] [Strategy 2 SUCCESS] Instaloader media thumbnail saved in ${duration}ms!`);
+          const phash = computeDHash(safeBuffer);
+          console.log(`[Thumbnail Scraper] [Strategy 2 SUCCESS] Instaloader media thumbnail saved in ${duration}ms! (pHash: ${phash})`);
           return {
             success: true,
             path: `/thumbnails/${postId}.jpg`,
@@ -777,6 +936,7 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
             strategyUsed: "Instaloader Python Extraction Engine",
             duration,
             httpStatus: 200,
+            phash,
             creatorUsername: ilRes.ownerUsername || usernameFromUrl || undefined,
             caption: ilRes.caption || undefined,
             hashtags: ilRes.hashtags || undefined
@@ -789,13 +949,13 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
   }
 
   // -----------------------------------------------------------------
-  // STRATEGY 3: ahmedrangel/instagram-media-scraper Direct GraphQL Engine
+  // STRATEGY 3: Enhanced Media Scraper Direct GraphQL & Mobile API Engine
   // -----------------------------------------------------------------
   try {
-    console.log(`[Thumbnail Scraper] [Strategy 3] Trying ahmedrangel scraper engine for shortcode: ${shortcode}`);
+    console.log(`[Thumbnail Scraper] [Strategy 3] Trying Enhanced Media Scraper engine for shortcode: ${shortcode}`);
     const arRes = await runAhmedRangelScraper(shortcode);
     if (arRes && arRes.success && arRes.displayUrl) {
-      console.log(`[Thumbnail Scraper] [Strategy 3 - AhmedRangel Engine] Media URL: ${arRes.displayUrl}`);
+      console.log(`[Thumbnail Scraper] [Strategy 3 - Media Scraper] Media URL: ${arRes.displayUrl}`);
       const imgRes = await fetchWithTimeout(arRes.displayUrl, { headers: getRandomHeaders(arRes.displayUrl) }, 3000);
       if (imgRes.ok) {
         const safeBuffer = Buffer.from(await imgRes.arrayBuffer());
@@ -807,26 +967,50 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
           }
           await fs.promises.writeFile(absolutePathJpg, safeBuffer);
           const duration = Date.now() - startTime;
-          console.log(`[Thumbnail Scraper] [Strategy 3 SUCCESS] AhmedRangel Scraper media thumbnail saved in ${duration}ms!`);
+          const phash = computeDHash(safeBuffer);
+
+          // Download additional carousel slides if present
+          if (Array.isArray(arRes.slides) && arRes.slides.length > 1) {
+            for (let i = 1; i < Math.min(arRes.slides.length, 10); i++) {
+              const slideUrl = arRes.slides[i];
+              if (!slideUrl) continue;
+              const slidePath = path.join(THUMBNAILS_DIR, `${postId}_${i}.jpg`);
+              const slideRelativePath = `/thumbnails/${postId}_${i}.jpg`;
+              try {
+                const sRes = await fetchWithTimeout(slideUrl, { headers: getRandomHeaders(slideUrl) }, 2500);
+                if (sRes.ok) {
+                  const sBuf = Buffer.from(await sRes.arrayBuffer());
+                  if (isValidImageBuffer(sBuf)) {
+                    await fs.promises.writeFile(slidePath, sBuf);
+                    additionalSlides.push(slideRelativePath);
+                  }
+                }
+              } catch (e) {}
+            }
+          }
+
+          console.log(`[Thumbnail Scraper] [Strategy 3 SUCCESS] Media Scraper thumbnail saved in ${duration}ms! (pHash: ${phash})`);
           return {
             success: true,
             path: `/thumbnails/${postId}.jpg`,
             dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
-            strategyUsed: "ahmedrangel/instagram-media-scraper GraphQL Engine",
+            strategyUsed: arRes.strategy || "Enhanced Instagram Media Scraper Engine",
             duration,
             httpStatus: 200,
+            phash,
             creatorUsername: arRes.ownerUsername || usernameFromUrl || undefined,
             caption: arRes.caption || undefined,
+            additionalSlides: additionalSlides.length > 0 ? additionalSlides : undefined
           };
         }
       }
     }
   } catch (err: any) {
-    console.log(`[Thumbnail Scraper] [Strategy 3 - AhmedRangel Engine Bypassed]: ${err.message || err}`);
+    console.log(`[Thumbnail Scraper] [Strategy 3 - Media Scraper Bypassed]: ${err.message || err}`);
   }
 
   // -----------------------------------------------------------------
-  // STRATEGY 4: Rotating Mirror Metatag Extractors (ddinstagram / vxinstagram / kkinstagram / instafix)
+  // STRATEGY 4: Parallel Mirror Fan-Out with First-Success Cancellation (Promise.any)
   // -----------------------------------------------------------------
   const mirrors = [
     { name: "ddinstagram", domain: "ddinstagram.com", url: `https://ddinstagram.com/p/${shortcode}/` },
@@ -835,62 +1019,84 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
     { name: "instafix", domain: "instafix.app", url: `https://instafix.app/p/${shortcode}/` }
   ];
 
-  for (const mirror of mirrors) {
-    if (isHostInCooldown(mirror.domain)) {
-      continue;
+  let availableMirrors = mirrors.filter(m => !isHostInCooldown(m.domain));
+  if (availableMirrors.length === 0) {
+    console.log(`[Thumbnail Scraper] [Strategy 4] All mirrors currently in cooldown. Resetting circuit breaker for safety.`);
+    for (const m of mirrors) {
+      hostFailures.delete(m.domain);
     }
+    availableMirrors = mirrors;
+  }
 
+  if (availableMirrors.length > 0) {
     try {
-      const mirrorRes = await fetchWithTimeout(mirror.url, { headers, redirect: 'follow' }, 2000);
-      
-      if (mirrorRes.ok) {
-        recordHostSuccess(mirror.domain);
-        const mirrorHtml = await mirrorRes.text();
-        const ogMatch = mirrorHtml.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || 
-                        mirrorHtml.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
-                        mirrorHtml.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
-        
-        let mirrorUsername: string | null = null;
-        const titleMatch = mirrorHtml.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
-        if (titleMatch && titleMatch[1]) {
-          const atMatch = titleMatch[1].match(/@([a-zA-Z0-9_\.]+)/);
-          if (atMatch && atMatch[1]) mirrorUsername = atMatch[1];
-        }
+      const abortController = new AbortController();
+      console.log(`[Thumbnail Scraper] [Strategy 4 Parallel Fan-Out] Dispatching ${availableMirrors.length} mirrors simultaneously`);
 
-        if (ogMatch && ogMatch[1]) {
-          const mirrorImageUrl = cleanImageUrl(ogMatch[1]);
-          
-          const imgRes = await fetchWithTimeout(mirrorImageUrl, { headers: getRandomHeaders(mirror.url) }, 2500);
-          if (imgRes.ok) {
-            const bufferArray = await imgRes.arrayBuffer();
-            const safeBuffer = Buffer.from(bufferArray);
-            if (isValidImageBuffer(safeBuffer)) {
-              const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-              const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
-              if (fs.existsSync(absolutePathSvg)) {
-                try { await fs.promises.unlink(absolutePathSvg); } catch (e) {}
-              }
-              await fs.promises.writeFile(absolutePathJpg, safeBuffer);
-              const duration = Date.now() - startTime;
-              console.log(`[Thumbnail Scraper] [Strategy 4 SUCCESS (${mirror.name})] Saved JPG in ${duration}ms!`);
-              
-              return {
-                success: true,
-                path: `/thumbnails/${postId}.jpg`,
-                dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
-                strategyUsed: `Mirror Metatag Extractor (${mirror.name})`,
-                duration,
-                httpStatus: 200,
-                creatorUsername: mirrorUsername || usernameFromUrl || undefined
-              };
-            }
+      const mirrorTask = async (mirror: typeof mirrors[0]) => {
+        try {
+          const mirrorRes = await fetchWithTimeout(mirror.url, { headers, redirect: 'follow', signal: abortController.signal }, 5000);
+          if (!mirrorRes.ok) {
+            recordHostFailure(mirror.domain);
+            throw new Error(`returned HTTP status ${mirrorRes.status}`);
           }
+          recordHostSuccess(mirror.domain);
+          const mirrorHtml = await mirrorRes.text();
+          const ogMatch = mirrorHtml.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || 
+                          mirrorHtml.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
+                          mirrorHtml.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
+          
+          if (!ogMatch || !ogMatch[1]) {
+            throw new Error(`provided no valid og:image or twitter:image meta tags in HTML`);
+          }
+
+          let mirrorUsername: string | null = null;
+          const titleMatch = mirrorHtml.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+          if (titleMatch && titleMatch[1]) {
+            const atMatch = titleMatch[1].match(/@([a-zA-Z0-9_\.]+)/);
+            if (atMatch && atMatch[1]) mirrorUsername = atMatch[1];
+          }
+
+          const mirrorImageUrl = cleanImageUrl(ogMatch[1]);
+          const imgRes = await fetchWithTimeout(mirrorImageUrl, { headers: getRandomHeaders(mirror.url), signal: abortController.signal }, 5000);
+          if (!imgRes.ok) throw new Error(`image download failed with status ${imgRes.status}`);
+
+          const bufferArray = await imgRes.arrayBuffer();
+          const safeBuffer = Buffer.from(bufferArray);
+          if (!isValidImageBuffer(safeBuffer)) throw new Error(`returned invalid/corrupt image buffer`);
+
+          return { safeBuffer, mirrorName: mirror.name, mirrorUsername };
+        } catch (err: any) {
+          console.log(`[Thumbnail Scraper] [Strategy 4 Mirror Failed] ${mirror.name}: ${err.message || err}`);
+          throw err;
         }
-      } else {
-        recordHostFailure(mirror.domain);
+      };
+
+      const winner = await Promise.any(availableMirrors.map(m => mirrorTask(m)));
+      abortController.abort(); // Cancel remaining mirror requests immediately
+
+      const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
+      const absolutePathSvg = path.join(THUMBNAILS_DIR, `${postId}.svg`);
+      if (fs.existsSync(absolutePathSvg)) {
+        try { await fs.promises.unlink(absolutePathSvg); } catch (e) {}
       }
-    } catch {
-      recordHostFailure(mirror.domain);
+      await fs.promises.writeFile(absolutePathJpg, winner.safeBuffer);
+      const duration = Date.now() - startTime;
+      const phash = computeDHash(winner.safeBuffer);
+      console.log(`[Thumbnail Scraper] [Strategy 4 SUCCESS (${winner.mirrorName})] Parallel mirror saved in ${duration}ms! (pHash: ${phash})`);
+
+      return {
+        success: true,
+        path: `/thumbnails/${postId}.jpg`,
+        dataUrl: `data:image/jpeg;base64,${winner.safeBuffer.toString('base64')}`,
+        strategyUsed: `Parallel Mirror Fan-Out (${winner.mirrorName})`,
+        duration,
+        httpStatus: 200,
+        phash,
+        creatorUsername: winner.mirrorUsername || usernameFromUrl || undefined
+      };
+    } catch (parallelErr: any) {
+      console.log(`[Thumbnail Scraper] [Strategy 4 Parallel Fan-Out All Failed]: ${parallelErr.message}`);
     }
   }
 
@@ -959,7 +1165,8 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
             }
             await fs.promises.writeFile(absolutePathJpg, safeBuffer);
             const duration = Date.now() - startTime;
-            console.log(`[Thumbnail Scraper] [Strategy 3 SUCCESS] Saved JPG in ${duration}ms!`);
+            const phash = computeDHash(safeBuffer);
+            console.log(`[Thumbnail Scraper] [Strategy 3 SUCCESS] Saved JPG in ${duration}ms! (pHash: ${phash})`);
 
             return {
               success: true,
@@ -968,6 +1175,7 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
               strategyUsed: "Public Instagram Embed Extraction",
               duration,
               httpStatus: 200,
+              phash,
               creatorUsername: creatorUsername || undefined,
               additionalSlides: additionalSlides.length > 0 ? additionalSlides : undefined
             };
@@ -988,25 +1196,42 @@ async function scrapeInstagramImageInternal(postUrl: string, postId: string, for
     const oembedRes = await fetchWithTimeout(oembedUrl, { headers }, 2500);
     if (oembedRes.ok) {
       const oembedData = await oembedRes.json();
-      if (oembedData && oembedData.thumbnail_url) {
-        const imgUrl = cleanImageUrl(oembedData.thumbnail_url);
-        const imgRes = await fetchWithTimeout(imgUrl, { headers: getRandomHeaders(oembedUrl) }, 3000);
-        if (imgRes.ok) {
-          const safeBuffer = Buffer.from(await imgRes.arrayBuffer());
-          if (isValidImageBuffer(safeBuffer)) {
-            const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
-            await fs.promises.writeFile(absolutePathJpg, safeBuffer);
-            const duration = Date.now() - startTime;
-            console.log(`[Thumbnail Scraper] [Strategy 4 SUCCESS] oEmbed thumbnail saved in ${duration}ms!`);
-            return {
-              success: true,
-              path: `/thumbnails/${postId}.jpg`,
-              dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
-              strategyUsed: "Instagram oEmbed API Endpoint",
-              duration,
-              httpStatus: 200,
-              creatorUsername: oembedData.author_name || usernameFromUrl || undefined
-            };
+      if (oembedData) {
+        let imgUrl = oembedData.thumbnail_url ? cleanImageUrl(oembedData.thumbnail_url) : null;
+
+        // Primary fallback when direct page scraping and oembed direct thumbnail fail:
+        // Extract og:image from the oEmbed block's HTML representation
+        if (!imgUrl && oembedData.html) {
+          console.log(`[Thumbnail Scraper] [Strategy 4] Direct thumbnail_url missing. Parsing og:image OpenGraph fallback from html...`);
+          const ogMatch = oembedData.html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || 
+                          oembedData.html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
+                          oembedData.html.match(/<img[^>]*src=["']([^"']+)["']/i);
+          if (ogMatch && ogMatch[1]) {
+            imgUrl = cleanImageUrl(ogMatch[1]);
+          }
+        }
+
+        if (imgUrl) {
+          const imgRes = await fetchWithTimeout(imgUrl, { headers: getRandomHeaders(oembedUrl) }, 3000);
+          if (imgRes.ok) {
+            const safeBuffer = Buffer.from(await imgRes.arrayBuffer());
+            if (isValidImageBuffer(safeBuffer)) {
+              const absolutePathJpg = path.join(THUMBNAILS_DIR, `${postId}.jpg`);
+              await fs.promises.writeFile(absolutePathJpg, safeBuffer);
+              const duration = Date.now() - startTime;
+              const phash = computeDHash(safeBuffer);
+              console.log(`[Thumbnail Scraper] [Strategy 4 SUCCESS] oEmbed thumbnail saved in ${duration}ms! (pHash: ${phash})`);
+              return {
+                success: true,
+                path: `/thumbnails/${postId}.jpg`,
+                dataUrl: `data:image/jpeg;base64,${safeBuffer.toString('base64')}`,
+                strategyUsed: "Instagram oEmbed API Endpoint",
+                duration,
+                httpStatus: 200,
+                phash,
+                creatorUsername: oembedData.author_name || usernameFromUrl || undefined
+              };
+            }
           }
         }
       }
@@ -1109,6 +1334,8 @@ app.post("/api/fetch-thumbnail", async (req, res) => {
       strategyUsed: result.strategyUsed,
       duration: result.duration,
       creatorUsername: result.creatorUsername || undefined,
+      caption: result.caption || undefined,
+      hashtags: result.hashtags || undefined,
       additionalSlides: result.additionalSlides
     });
   } else {
@@ -1317,6 +1544,96 @@ app.post("/api/oembed", async (req, res) => {
   }
 });
 
+// API: Server-side Proxy Route to bypass Instagram CORS & anti-scraping for OpenGraph metadata
+app.post("/api/proxy-opengraph", async (req, res) => {
+  const { url } = req.body;
+  const cleanUrl = typeof url === 'string' ? url.trim() : '';
+
+  if (!cleanUrl) {
+    res.json({ success: false, error: "Missing url parameter" });
+    return;
+  }
+
+  try {
+    console.log(`[OpenGraph Proxy] Fetching URL: ${cleanUrl}`);
+    const headers = getRandomHeaders(cleanUrl);
+    const response = await fetchWithTimeout(cleanUrl, { headers }, 5000);
+    
+    if (!response.ok) {
+      throw new Error(`Failed to fetch URL. HTTP status: ${response.status}`);
+    }
+
+    const html = await response.text();
+    
+    // Extract OpenGraph tags
+    const ogImageMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || 
+                         html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i);
+    const ogTitleMatch = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i) || 
+                         html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:title["']/i);
+    const ogDescMatch = html.match(/<meta[^>]*property=["']og:description["'][^>]*content=["']([^"']+)["']/i) || 
+                        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:description["']/i);
+    const ogVideoMatch = html.match(/<meta[^>]*property=["']og:video["'][^>]*content=["']([^"']+)["']/i) || 
+                         html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:video["']/i);
+    const ogTypeMatch = html.match(/<meta[^>]*property=["']og:type["'][^>]*content=["']([^"']+)["']/i) || 
+                        html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:type["']/i);
+
+    const metadata = {
+      image: ogImageMatch ? cleanImageUrl(ogImageMatch[1]) : null,
+      title: ogTitleMatch ? ogTitleMatch[1] : null,
+      description: ogDescMatch ? ogDescMatch[1] : null,
+      video: ogVideoMatch ? ogVideoMatch[1] : null,
+      type: ogTypeMatch ? ogTypeMatch[1] : null,
+      url: cleanUrl
+    };
+
+    console.log(`[OpenGraph Proxy SUCCESS] Metadata extracted:`, metadata);
+    res.json({ success: true, metadata });
+  } catch (err: any) {
+    console.warn(`[OpenGraph Proxy] Direct scraping failed: ${err.message || err}. Attempting oEmbed fallback...`);
+    
+    // Fallback to Instagram oEmbed endpoint
+    try {
+      const oembedUrl = `https://api.instagram.com/oembed/?url=${encodeURIComponent(cleanUrl)}`;
+      const oembedRes = await fetchWithTimeout(oembedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      }, 3000);
+
+      if (oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        let fallbackImage = oembedData.thumbnail_url ? cleanImageUrl(oembedData.thumbnail_url) : null;
+        
+        if (!fallbackImage && oembedData.html) {
+          const ogMatch = oembedData.html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || 
+                          oembedData.html.match(/<meta[^>]*content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
+                          oembedData.html.match(/<img[^>]*src=["']([^"']+)["']/i);
+          if (ogMatch && ogMatch[1]) {
+            fallbackImage = cleanImageUrl(ogMatch[1]);
+          }
+        }
+
+        res.json({
+          success: true,
+          metadata: {
+            image: fallbackImage,
+            title: oembedData.title || null,
+            description: null,
+            video: null,
+            type: "instapp:photo",
+            url: cleanUrl,
+            author_name: oembedData.author_name || null
+          }
+        });
+      } else {
+        res.json({ success: false, error: `Direct scraping failed: ${err.message}. oEmbed returned HTTP ${oembedRes.status}` });
+      }
+    } catch (fallbackErr: any) {
+      res.json({ success: false, error: `Direct scraping failed: ${err.message}. oEmbed fallback failed: ${fallbackErr.message}` });
+    }
+  }
+});
+
 // API: Dedicated Instaloader Extract Endpoint (Un-nested)
 app.post("/api/instaloader-extract", async (req, res) => {
   const { url, shortcode } = req.body;
@@ -1346,7 +1663,7 @@ app.post("/api/media-scraper-extract", async (req, res) => {
 // API: Get scraping configuration
 app.get("/api/scraping-config", (req, res) => {
   const configPath = path.join(process.cwd(), "scripts", "scraping_config.json");
-  let config = { username: "", password: "", session_cookie: "", proxy: "" };
+  let config: any = { username: "", password: "", session_cookie: "", session_cookies: [], proxy: "", proxy_pool: [] };
   if (fs.existsSync(configPath)) {
     try {
       config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
@@ -1355,15 +1672,18 @@ app.get("/api/scraping-config", (req, res) => {
   res.json({
     username: config.username || "",
     hasPassword: !!config.password,
-    hasSessionCookie: !!config.session_cookie,
+    hasSessionCookie: !!(config.session_cookie || (config.session_cookies && config.session_cookies.length > 0)),
     sessionCookieMasked: config.session_cookie ? `${config.session_cookie.substring(0, 4)}...${config.session_cookie.substring(config.session_cookie.length - 4)}` : "",
-    proxy: config.proxy || ""
+    sessionCookiesCount: (config.session_cookies || []).length,
+    proxy: config.proxy || "",
+    proxyPoolCount: (config.proxy_pool || []).length,
+    sessionPoolStats: sessionPool.getPoolStats()
   });
 });
 
 // API: Save scraping configuration
 app.post("/api/save-scraping-config", (req, res) => {
-  const { username, password, session_cookie, proxy } = req.body;
+  const { username, password, session_cookie, session_cookies, proxy, proxy_pool } = req.body;
   const configPath = path.join(process.cwd(), "scripts", "scraping_config.json");
   let currentConfig: any = {};
   if (fs.existsSync(configPath)) {
@@ -1375,15 +1695,144 @@ app.post("/api/save-scraping-config", (req, res) => {
   if (username !== undefined) currentConfig.username = username;
   if (password !== undefined && password !== "") currentConfig.password = password;
   if (session_cookie !== undefined) currentConfig.session_cookie = session_cookie;
+  if (session_cookies !== undefined && Array.isArray(session_cookies)) currentConfig.session_cookies = session_cookies;
   if (proxy !== undefined) currentConfig.proxy = proxy;
+  if (proxy_pool !== undefined && Array.isArray(proxy_pool)) currentConfig.proxy_pool = proxy_pool;
 
   try {
     fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2), "utf-8");
-    console.log("[Scraper Config] Saved updated config parameters to disk.");
-    res.json({ success: true, message: "Scraper configuration updated successfully." });
+    sessionPool.reloadConfig();
+    console.log("[Scraper Config] Saved updated config parameters and reloaded session pool.");
+    res.json({ success: true, message: "Scraper configuration updated successfully.", poolStats: sessionPool.getPoolStats() });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// API: Chrome Extension ZIP Ingestion Tool Download
+app.get("/api/download-extension", async (req, res) => {
+  try {
+    const zipBuffer = await generateExtensionZip();
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", 'attachment; filename="instasorter-capture-extension.zip"');
+    res.send(zipBuffer);
+  } catch (err: any) {
+    console.error("[Download Extension Error]:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Ingest post directly from Browser Extension / HAR Import
+app.post("/api/ingest-post", async (req, res) => {
+  try {
+    const post = req.body;
+    if (!post || !post.id) {
+      res.status(400).json({ success: false, error: "Missing required post payload." });
+      return;
+    }
+    const cleanId = post.id.replace(/^ig_/, '');
+    if (!fs.existsSync(THUMBNAILS_DIR)) {
+      fs.mkdirSync(THUMBNAILS_DIR, { recursive: true });
+    }
+
+    let localThumbnailUrl = post.thumbnailUrl;
+    let phash = post.phash || "";
+
+    // If thumbnail is a remote HTTP URL, persist locally to prevent hotlinking expiration
+    if (post.thumbnailUrl && post.thumbnailUrl.startsWith("http")) {
+      try {
+        const imgRes = await fetchWithTimeout(post.thumbnailUrl, { headers: getRandomWebHeaders(post.postUrl) }, 3500);
+        if (imgRes.ok) {
+          const safeBuf = Buffer.from(await imgRes.arrayBuffer());
+          if (isValidImageBuffer(safeBuf)) {
+            const filePath = path.join(THUMBNAILS_DIR, `${cleanId}.jpg`);
+            await fs.promises.writeFile(filePath, safeBuf);
+            localThumbnailUrl = `/thumbnails/${cleanId}.jpg`;
+            phash = computeDHash(safeBuf);
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[Ingest Post] Remote thumbnail cache failed: ${err.message}`);
+      }
+    }
+
+    // Process carousel slides if present
+    const additionalSlides: string[] = [];
+    if (Array.isArray(post.additionalSlides)) {
+      for (let i = 0; i < Math.min(post.additionalSlides.length, 10); i++) {
+        const sUrl = post.additionalSlides[i];
+        if (sUrl && sUrl.startsWith("http")) {
+          try {
+            const sRes = await fetchWithTimeout(sUrl, { headers: getRandomWebHeaders(post.postUrl) }, 2500);
+            if (sRes.ok) {
+              const sBuf = Buffer.from(await sRes.arrayBuffer());
+              if (isValidImageBuffer(sBuf)) {
+                const sPath = path.join(THUMBNAILS_DIR, `${cleanId}_${i + 1}.jpg`);
+                await fs.promises.writeFile(sPath, sBuf);
+                additionalSlides.push(`/thumbnails/${cleanId}_${i + 1}.jpg`);
+              }
+            }
+          } catch {}
+        } else if (sUrl) {
+          additionalSlides.push(sUrl);
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      post: {
+        ...post,
+        id: `ig_${cleanId}`,
+        thumbnailUrl: localThumbnailUrl,
+        additionalSlides: additionalSlides.length > 0 ? additionalSlides : post.additionalSlides,
+        phash: phash || undefined,
+        thumbnailStatus: "success"
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Batch Find Visual Duplicates using Hamming Distance of pHash
+app.post("/api/find-duplicates", (req, res) => {
+  const posts = req.body?.posts;
+  const threshold = typeof req.body?.threshold === "number" ? req.body.threshold : 10;
+  if (!Array.isArray(posts) || posts.length === 0) {
+    res.json({ success: true, duplicateGroups: [] });
+    return;
+  }
+
+  const validPosts = posts.filter(p => p && p.id && p.phash);
+  const visited = new Set<string>();
+  const duplicateGroups: Array<{ primaryId: string; duplicates: Array<{ id: string; distance: number }> }> = [];
+
+  for (let i = 0; i < validPosts.length; i++) {
+    const p1 = validPosts[i];
+    if (visited.has(p1.id)) continue;
+
+    const group: Array<{ id: string; distance: number }> = [];
+    for (let j = i + 1; j < validPosts.length; j++) {
+      const p2 = validPosts[j];
+      if (visited.has(p2.id)) continue;
+      const dist = calculateHammingDistance(p1.phash, p2.phash);
+      if (dist <= threshold) {
+        visited.add(p2.id);
+        group.push({ id: p2.id, distance: dist });
+      }
+    }
+
+    if (group.length > 0) {
+      visited.add(p1.id);
+      duplicateGroups.push({
+        primaryId: p1.id,
+        duplicates: group
+      });
+    }
+  }
+
+  res.json({ success: true, duplicateGroups, totalGroups: duplicateGroups.length });
 });
 
 // API: Test/Check Instagram Session Cookie Health
@@ -1474,9 +1923,10 @@ interface ServerQueueItem {
   url: string;
   mediaType?: string;
   attempts: number;
+  priority?: "high" | "normal";
 }
 const serverScrapeQueue: ServerQueueItem[] = [];
-const serverQueueStatusMap = new Map<string, { status: "pending" | "processing" | "success" | "failed"; path?: string; error?: string }>();
+const serverQueueStatusMap = new Map<string, { status: "pending" | "processing" | "success" | "failed"; path?: string; phash?: string; additionalSlides?: string[]; error?: string }>();
 let isServerQueueProcessing = false;
 
 async function processServerScrapeQueue() {
@@ -1496,7 +1946,12 @@ async function processServerScrapeQueue() {
       const result = await scrapeInstagramImage(item.url, item.id, false, item.mediaType);
       
       if (result.success && result.path) {
-        serverQueueStatusMap.set(item.id, { status: "success", path: result.path });
+        serverQueueStatusMap.set(item.id, {
+          status: "success",
+          path: result.path,
+          phash: (result as any).phash,
+          additionalSlides: (result as any).additionalSlides
+        });
       } else {
         serverQueueStatusMap.set(item.id, { status: "failed", error: result.reason || "Extraction failed" });
       }
@@ -1504,8 +1959,8 @@ async function processServerScrapeQueue() {
       serverQueueStatusMap.set(item.id, { status: "failed", error: err.message });
     }
 
-    // Polite stagger delay between server background scrapes (300ms)
-    await new Promise((r) => setTimeout(r, 300));
+    // Polite jittered stagger delay between server background scrapes (200-400ms)
+    await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 200) + 200));
   }
 
   isServerQueueProcessing = false;
@@ -1516,7 +1971,7 @@ async function processServerScrapeQueue() {
 app.post("/api/queue-background-scrape", (req, res) => {
   const { posts } = req.body;
   if (!Array.isArray(posts)) {
-    res.status(400).json({ success: false, error: "posts must be an array of { id, url, mediaType } objects." });
+    res.status(400).json({ success: false, error: "posts must be an array of { id, url, mediaType, priority } objects." });
     return;
   }
 
@@ -1529,7 +1984,19 @@ app.post("/api/queue-background-scrape", (req, res) => {
     if (current && (current.status === "success" || current.status === "processing")) continue;
 
     serverQueueStatusMap.set(p.id, { status: "pending" });
-    serverScrapeQueue.push({ id: p.id, url: p.url, mediaType: p.mediaType, attempts: 0 });
+    const queueItem: ServerQueueItem = {
+      id: p.id,
+      url: p.url,
+      mediaType: p.mediaType,
+      attempts: 0,
+      priority: p.priority || "normal"
+    };
+
+    if (p.priority === "high") {
+      serverScrapeQueue.unshift(queueItem); // High-priority viewport items jump to front
+    } else {
+      serverScrapeQueue.push(queueItem);
+    }
     queuedCount++;
   }
 
@@ -1540,6 +2007,19 @@ app.post("/api/queue-background-scrape", (req, res) => {
     success: true,
     queuedCount,
     totalInQueue: serverScrapeQueue.length
+  });
+});
+
+// API: Pool Statistics
+app.get("/api/scraper-pool-stats", (req, res) => {
+  res.json({
+    success: true,
+    pool: sessionPool.getPoolStats(),
+    queue: {
+      totalInQueue: serverScrapeQueue.length,
+      isProcessing: isServerQueueProcessing,
+      trackedCount: serverQueueStatusMap.size
+    }
   });
 });
 
