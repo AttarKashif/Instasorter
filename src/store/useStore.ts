@@ -54,6 +54,8 @@ interface PostState {
   setActivePreviewPost: (post: Post | null) => void;
   isImportModalOpen: boolean;
   setIsImportModalOpen: (open: boolean) => void;
+  isTourOpen: boolean;
+  setIsTourOpen: (open: boolean) => void;
   isBackgroundOrganizerEnabled: boolean;
   setIsBackgroundOrganizerEnabled: (enabled: boolean) => void;
   backgroundOrganizerStatus: "idle" | "running" | "completed" | "error";
@@ -122,6 +124,8 @@ export const usePostStore = create<PostState>((set, get) => ({
     set({ isImporting, importMessage }),
   isImportModalOpen: false,
   setIsImportModalOpen: (open) => set({ isImportModalOpen: open }),
+  isTourOpen: false,
+  setIsTourOpen: (open) => set({ isTourOpen: open }),
   searchQuery: "",
   setSearchQuery: (query) => set({ searchQuery: query }),
   activePreviewPost: null,

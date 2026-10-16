@@ -11,6 +11,8 @@ import {
   Calendar,
   User,
   Tag,
+  Play,
+  SquareStack,
   Film,
   Layers,
   MessageCircle,
@@ -204,14 +206,14 @@ export const FullScreenMediaViewer: React.FC<FullScreenMediaViewerProps> = ({
 
             {/* Video or Carousel Badge */}
             {isVideo && (
-              <div className="absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-extrabold tracking-wider bg-black/70 backdrop-blur-md text-white flex items-center gap-1.5 border border-white/15 z-20">
-                <Film size={14} className="text-m3-primary" />
+              <div className="absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-extrabold tracking-wider bg-black/75 backdrop-blur-md text-white flex items-center gap-1.5 border border-white/20 z-20 shadow-lg">
+                <Play size={12} className="fill-white text-white" />
                 <span>Reel / Video</span>
               </div>
             )}
             {currentPost.mediaType === "carousel" && (
-              <div className="absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-extrabold tracking-wider bg-black/70 backdrop-blur-md text-white flex items-center gap-1.5 border border-white/15 z-20">
-                <Layers size={14} className="text-m3-primary" />
+              <div className="absolute top-4 left-4 px-3 py-1 rounded-full text-xs font-extrabold tracking-wider bg-black/75 backdrop-blur-md text-white flex items-center gap-1.5 border border-white/20 z-20 shadow-lg">
+                <SquareStack size={13} className="stroke-[2.2] text-white" />
                 <span>Carousel ({currentPost.mediaCount || 2} slides)</span>
               </div>
             )}

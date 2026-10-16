@@ -8,6 +8,7 @@
         "@google/genai": "^1.29.0",
         "@tailwindcss/vite": "^4.1.14",
         "@vitejs/plugin-react": "^5.0.4",
+        "cakkatrok-instagram-downloader": "^2.0.2",
         "clsx": "^2.1.1",
         "d3": "^7.9.0",
         "dexie": "^4.4.2",
@@ -413,6 +414,8 @@
     "buffer-equal-constant-time": ["buffer-equal-constant-time@1.0.1", "", {}, "sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA=="],
 
     "bytes": ["bytes@3.1.2", "", {}, "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="],
+
+    "cakkatrok-instagram-downloader": ["cakkatrok-instagram-downloader@2.0.2", "", { "bin": { "instagram-downloader": "bin/instagram.js" } }, "sha512-n5SBnUDX+Fu6xeBk5aLpnTMDflfFJHtH9enKYXk2AZans4t8riPVnMKKKKyeGMsGR15EakXIRjoWTcroH2eOLg=="],
 
     "call-bind-apply-helpers": ["call-bind-apply-helpers@1.0.2", "", { "dependencies": { "es-errors": "^1.3.0", "function-bind": "^1.1.2" } }, "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ=="],
 

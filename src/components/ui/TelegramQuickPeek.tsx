@@ -6,6 +6,8 @@ import {
   Copy,
   Check,
   X,
+  Play,
+  SquareStack,
   Film,
   Image as ImageIcon,
   Download,
@@ -110,11 +112,13 @@ export const TelegramQuickPeek = ({
           )}
 
           {/* Media Type Overlay */}
-          <span className="absolute bottom-3 right-3 px-2 py-0.5 rounded-full text-[9px] font-bold uppercase bg-black/60 text-white flex items-center gap-1">
-            {post.mediaType === "video" ? (
-              <Film size={10} />
+          <span className="absolute bottom-3 right-3 px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase bg-black/75 backdrop-blur-md text-white flex items-center gap-1 border border-white/20 shadow-md">
+            {post.mediaType === "video" || !!post.isReel ? (
+              <Play size={9} className="fill-white text-white" />
+            ) : post.mediaType === "carousel" ? (
+              <SquareStack size={10} className="stroke-[2.2] text-white" />
             ) : (
-              <ImageIcon size={10} />
+              <ImageIcon size={9} className="text-white" />
             )}
             <span>{post.mediaType || "image"}</span>
           </span>

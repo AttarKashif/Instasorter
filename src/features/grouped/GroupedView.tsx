@@ -17,6 +17,8 @@ import {
   Search,
   SlidersHorizontal,
   X,
+  Play,
+  SquareStack,
   Film,
   Layers,
   Edit2,
@@ -1064,6 +1066,30 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
                   </button>
                 )
               )}
+              {/* Media indicator badges (Video/Carousel intuitive overlays) */}
+              <div className="absolute top-2 right-2 z-20 flex items-center gap-1 pointer-events-none drop-shadow-md">
+                {(post.mediaType === "video" || !!post.isReel || post.postUrl?.includes("/reel/")) && (
+                  <div
+                    className="w-6 h-6 rounded-full bg-black/75 backdrop-blur-md flex items-center justify-center text-white border border-white/20 shadow-md"
+                    title="Video / Reel"
+                  >
+                    <Play size={10} className="fill-white text-white ml-0.5" />
+                  </div>
+                )}
+                {(post.mediaType === "carousel" || (post.additionalSlides && post.additionalSlides.length > 0) || (post.mediaCount && post.mediaCount > 1)) && (
+                  <div
+                    className="h-6 px-1.5 min-w-6 rounded-full bg-black/75 backdrop-blur-md flex items-center justify-center gap-1 text-white text-[10px] font-mono font-bold border border-white/20 shadow-md"
+                    title="Carousel"
+                  >
+                    <SquareStack size={11} className="stroke-[2.2]" />
+                    {((post.mediaCount && post.mediaCount > 1) || (post.additionalSlides && post.additionalSlides.length > 0)) && (
+                      <span className="pr-0.5 leading-none">
+                        {post.mediaCount || (post.additionalSlides ? post.additionalSlides.length + 1 : "")}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -1431,24 +1457,24 @@ export const GroupedView: React.FC<GroupedViewProps> = React.memo(
                           </button>
                           <button
                             onClick={() => setPostFilterType("video")}
-                            className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer font-sans ${
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer font-sans ${
                               postFilterType === "video"
                                 ? "bg-m3-primary text-m3-on-primary shadow-xs"
                                 : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                             }`}
                           >
-                            <Film size={11} />
+                            <Play size={10} className="fill-current" />
                             {t.videos}
                           </button>
                           <button
                             onClick={() => setPostFilterType("carousel")}
-                            className={`flex items-center gap-1 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer font-sans ${
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer font-sans ${
                               postFilterType === "carousel"
                                 ? "bg-m3-primary text-m3-on-primary shadow-xs"
                                 : "text-m3-on-surface-variant hover:bg-m3-surface-variant/40"
                             }`}
                           >
-                            <Layers size={11} />
+                            <SquareStack size={11} className="stroke-[2.2]" />
                             {t.carousels}
                           </button>
                         </div>

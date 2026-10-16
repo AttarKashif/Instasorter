@@ -834,12 +834,12 @@ export const normalizeInstagramPost = (raw: any): Post => {
   thumbnailUrl = validateThumbnailUrl(thumbnailUrl.trim());
   if (
     !thumbnailUrl ||
-    (!thumbnailUrl.startsWith("http") && !thumbnailUrl.startsWith("data:"))
+    (!thumbnailUrl.startsWith("http") && !thumbnailUrl.startsWith("data:") && !thumbnailUrl.startsWith("/"))
   ) {
-    thumbnailUrl = getDynamicCoverByKeywords(caption, tags, id);
+    thumbnailUrl = "";
   }
 
-  // 9. Extract additional slides if it's a carousel, or generate aesthetic ones if empty
+  // 9. Extract additional slides if it's a carousel
   const additionalSlides: string[] = [];
   if (raw.media_list_data && raw.media_list_data.length > 1) {
     for (let i = 1; i < raw.media_list_data.length; i++) {
@@ -854,32 +854,16 @@ export const normalizeInstagramPost = (raw: any): Post => {
         slideUrl = slideItem.string_map_data["Media URL"]?.value || "";
       }
       slideUrl = (slideUrl || "").trim();
-      if (slideUrl) {
+      if (slideUrl && (slideUrl.startsWith("http") || slideUrl.startsWith("data:") || slideUrl.startsWith("/"))) {
         additionalSlides.push(slideUrl);
       }
     }
   } else if (raw.additionalSlides && Array.isArray(raw.additionalSlides)) {
-    additionalSlides.push(...raw.additionalSlides);
-  }
-
-  // Generate fallback slides for carousel posts if we don't have any, making them beautiful and interactive
-  if (mediaType === "carousel" && additionalSlides.length === 0) {
-    const hashString = (str: string): number => {
-      let hash = 0;
-      for (let i = 0; i < str.length; i++) {
-        hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    raw.additionalSlides.forEach((s: any) => {
+      if (typeof s === "string" && (s.startsWith("http") || s.startsWith("data:") || s.startsWith("/"))) {
+        additionalSlides.push(s);
       }
-      return hash;
-    };
-    const slideCount = 2 + (Math.abs(hashString(id)) % 3); // 2 to 4 slides
-    for (let i = 1; i <= slideCount; i++) {
-      const fallbackSlide = getDynamicCoverByKeywords(
-        caption,
-        tags,
-        `${id}_slide_${i}`,
-      );
-      additionalSlides.push(fallbackSlide);
-    }
+    });
   }
 
 

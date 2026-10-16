@@ -20,6 +20,7 @@ import { validateThumbnailUrl } from "./lib/validation";
 import { Toaster } from "react-hot-toast";
 import { SkeletonLoader } from "./components/ui/SkeletonLoader";
 import { OnboardingView } from "./components/ui/OnboardingView";
+import { GuidedTour } from "./components/ui/GuidedTour";
 import { startBackgroundAutoOrganizer, stopBackgroundAutoOrganizer } from "./lib/backgroundAutoOrganizerWorker";
 import { triggerHaptic } from "./lib/haptic";
 import { useMediaQuery } from "./hooks/useMediaQuery";
@@ -159,6 +160,8 @@ export default function App() {
   const isLoading = usePostStore((state) => state.isLoading);
   const isImportModalOpen = usePostStore((state) => state.isImportModalOpen);
   const setIsImportModalOpen = usePostStore((state) => state.setIsImportModalOpen);
+  const isTourOpen = usePostStore((state) => state.isTourOpen);
+  const setIsTourOpen = usePostStore((state) => state.setIsTourOpen);
 
   const [isResetting, setIsResetting] = useState(false);
 
@@ -616,6 +619,8 @@ export default function App() {
           <ImportView onClose={() => setIsImportModalOpen(false)} />
         )}
       </AnimatePresence>
+
+      <GuidedTour isOpen={isTourOpen} onClose={() => setIsTourOpen(false)} />
     </Shell>
   );
 }

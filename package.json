@@ -14,6 +14,7 @@
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
+    "cakkatrok-instagram-downloader": "^2.0.2",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
     "dexie": "^4.4.2",

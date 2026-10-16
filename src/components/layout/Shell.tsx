@@ -25,6 +25,10 @@ import {
   Sparkles,
   Folder,
   Database,
+  Home,
+  Bookmark,
+  PlusSquare,
+  Camera,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { usePostStore } from "../../store/useStore";
@@ -323,25 +327,25 @@ export const Shell = ({
   const navItems = [
     {
       id: "home" as const,
-      label: tShell.navDashboard,
-      icon: LayoutGrid,
-      description: "Browse and filter posts",
+      label: "Home",
+      icon: Home,
+      description: "Browse feed & media grid",
     },
     {
       id: "grouped" as const,
-      label: tShell.smartCollections,
-      icon: FolderTree,
-      description: "Collections & Creators",
+      label: "Saved",
+      icon: Bookmark,
+      description: "Collections & Folders",
     },
     {
       id: "analytics" as const,
-      label: tShell.navAnalytics,
+      label: "Insights",
       icon: BarChart3,
       description: "Visual statistics & insights",
     },
     {
       id: "settings" as const,
-      label: tShell.navSettings,
+      label: "Profile",
       icon: User,
       description: "View profile and settings",
     },
@@ -393,12 +397,12 @@ export const Shell = ({
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.9 }}
-                className="flex items-center gap-2"
+                className="flex items-center gap-2.5"
               >
-                <div className="w-8 h-8 rounded-xl bg-m3-primary text-m3-on-primary flex items-center justify-center font-display font-black text-xs shadow-xs">
-                  IS
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 via-rose-500 to-purple-600 text-white flex items-center justify-center shadow-xs">
+                  <Camera size={16} className="stroke-[2.5]" />
                 </div>
-                <span className="font-display font-bold text-base text-m3-on-surface tracking-tight">
+                <span className="font-display font-black text-lg text-m3-on-surface tracking-tight">
                   Instasorter
                 </span>
               </motion.div>
@@ -497,6 +501,28 @@ export const Shell = ({
                 </button>
               );
             })}
+
+            {/* Instagram Create / Import Button */}
+            <button
+              onClick={() => {
+                triggerVibration("light");
+                setIsImportModalOpen(true);
+              }}
+              className={`group relative flex items-center ${
+                isSidebarCollapsed ? "justify-center" : "justify-start"
+              } gap-4 p-4 min-h-[48px] rounded-full text-sm font-medium transition-all duration-200 cursor-pointer hover:bg-m3-surface-variant/20 w-full`}
+              title="Import Instagram Data"
+            >
+              <PlusSquare
+                size={20}
+                className="shrink-0 text-m3-on-surface-variant group-hover:text-m3-on-surface stroke-[2]"
+              />
+              {!isSidebarCollapsed && (
+                <span className="text-m3-on-surface-variant group-hover:text-m3-on-surface font-sans whitespace-nowrap">
+                  Create / Import
+                </span>
+              )}
+            </button>
 
             {!isSidebarCollapsed && smartCollections.length > 0 && (
               <motion.div
@@ -604,7 +630,7 @@ export const Shell = ({
 
             {/* Breadcrumb Trail Nav */}
             <nav aria-label="Breadcrumb navigation" className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
-              {/* Root Level: Dashboard */}
+              {/* Root Level: Instagram Header Wordmark */}
               <button
                 onClick={() => {
                   setActivePreviewPost(null);
@@ -615,15 +641,17 @@ export const Shell = ({
                   }
                   onNavigate("home");
                 }}
-                className={`flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ${
+                className={`flex items-center gap-2 transition-colors cursor-pointer shrink-0 ${
                   currentView === "home" && !activePreviewPost && !searchQuery
-                    ? "font-bold font-display text-m3-on-surface"
+                    ? "font-black font-display text-base tracking-tight text-m3-on-surface"
                     : "text-m3-on-surface-variant hover:text-m3-primary font-medium"
                 }`}
-                title="Navigate to Dashboard Home"
+                title="Navigate to Home Feed"
               >
-                <LayoutGrid size={13} className="text-m3-primary shrink-0" />
-                <span>Dashboard</span>
+                <div className="w-5 h-5 rounded-md bg-gradient-to-tr from-amber-500 via-rose-500 to-purple-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                  <Camera size={11} className="stroke-[2.5]" />
+                </div>
+                <span className="font-display font-bold text-sm sm:text-base tracking-tight">Instasorter</span>
               </button>
 
               {/* View Segment if not home */}
@@ -702,6 +730,18 @@ export const Shell = ({
               <span>{posts.length} items</span>
             </span>
 
+            <button
+              id="tour-import-btn"
+              onClick={() => {
+                triggerVibration("light");
+                setIsImportModalOpen(true);
+              }}
+              className="p-1.5 rounded-full hover:bg-m3-surface-variant/40 text-m3-on-surface-variant cursor-pointer transition-colors"
+              title="Import Instagram Data (4)"
+            >
+              <Upload size={15} />
+            </button>
+
             {theme && onThemeToggle && (
               <button
                 onClick={onThemeToggle}
@@ -725,60 +765,115 @@ export const Shell = ({
         {children}
       </main>
 
-      {/* Material 3 Bottom Navigation Bar (Mobile) */}
-      <nav className="md:hidden fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom,0px))] left-4 right-4 mx-auto max-w-[420px] h-16 bg-m3-surface-container/85 backdrop-blur-xl border border-m3-outline-variant/30 px-2 flex justify-around items-center z-50 rounded-full shadow-2xl">
-        {navItems.map((item) => {
-          const isActive = currentView === item.id;
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              onClick={() => handleNavClick(item.id)}
-              onMouseEnter={() => setHoveredMobileNavId(item.id)}
-              onMouseLeave={() => setHoveredMobileNavId(null)}
-              className="flex flex-col items-center justify-center w-[72px] h-[56px] relative cursor-pointer group focus-visible:outline focus-visible:outline-2 focus-visible:outline-m3-primary z-0"
-            >
-              {/* Sliding hover backdrop (KokonutUI Style) */}
-              {hoveredMobileNavId === item.id && !isActive && (
-                <motion.div
-                  layoutId="hover-mobile-nav"
-                  className="absolute inset-0 bg-m3-surface-variant/30 rounded-[16px] -z-10"
-                  transition={{ type: "spring", stiffness: 400, damping: 26 }}
-                />
-              )}
+      {/* Instagram iOS Bottom Navigation Bar (Mobile) */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[56px] pb-[calc(env(safe-area-inset-bottom,0px))] bg-white/95 dark:bg-black/95 backdrop-blur-2xl border-t border-zinc-200/80 dark:border-zinc-800/80 flex items-center justify-around px-1 select-none shadow-lg">
+        {/* Tab 1: Home */}
+        <button
+          onClick={() => handleNavClick("home")}
+          className="flex-1 h-full min-h-[44px] flex flex-col items-center justify-center gap-0.5 cursor-pointer active:scale-90 transition-transform"
+          title="Home Feed & Grid"
+          aria-label="Home"
+        >
+          <Home
+            size={22}
+            className={`transition-colors ${
+              currentView === "home"
+                ? "text-zinc-950 dark:text-white stroke-[2.4]"
+                : "text-zinc-500 dark:text-zinc-400 stroke-[1.8]"
+            }`}
+          />
+          <span className={`text-[10px] font-medium leading-none ${currentView === "home" ? "text-zinc-950 dark:text-white font-bold" : "text-zinc-500 dark:text-zinc-400"}`}>
+            Feed
+          </span>
+        </button>
 
-              {isActive && (
-                <motion.div
-                  layoutId="active-mobile-nav"
-                  className="absolute inset-0 bg-m3-primary-container rounded-[16px] z-0"
-                  transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                />
-              )}
-              {/* Icon Container */}
-              <div className="relative z-10 w-14 h-6 flex items-center justify-center mb-0.5">
-                <Icon
-                  size={20}
-                  className={`relative z-10 transition-colors duration-200 ${
-                    isActive
-                      ? "text-m3-on-primary-container stroke-[2.5]"
-                      : "text-m3-on-surface-variant"
-                  }`}
-                />
-              </div>
+        {/* Tab 2: Saved / Collections */}
+        <button
+          onClick={() => handleNavClick("grouped")}
+          className="flex-1 h-full min-h-[44px] flex flex-col items-center justify-center gap-0.5 cursor-pointer active:scale-90 transition-transform"
+          title="Saved Collections"
+          aria-label="Saved"
+        >
+          <Bookmark
+            size={21}
+            className={`transition-colors ${
+              currentView === "grouped"
+                ? "text-zinc-950 dark:text-white fill-current stroke-[2.2]"
+                : "text-zinc-500 dark:text-zinc-400 stroke-[1.8]"
+            }`}
+          />
+          <span className={`text-[10px] font-medium leading-none ${currentView === "grouped" ? "text-zinc-950 dark:text-white font-bold" : "text-zinc-500 dark:text-zinc-400"}`}>
+            Saved
+          </span>
+        </button>
 
-              {/* Nav Label */}
-              <span
-                className={`relative z-10 text-[10px] font-medium tracking-tight transition-all duration-200 ${
-                  isActive
-                    ? "text-m3-on-primary-container font-bold translate-y-0 opacity-100"
-                    : "text-m3-on-surface-variant opacity-70"
-                }`}
-              >
-                {item.label}
-              </span>
-            </button>
-          );
-        })}
+        {/* Tab 3: Create / Import (+) */}
+        <button
+          onClick={() => {
+            triggerVibration("light");
+            setIsImportModalOpen(true);
+          }}
+          className="flex-1 h-full min-h-[44px] flex flex-col items-center justify-center gap-0.5 cursor-pointer active:scale-90 transition-transform"
+          title="Import Instagram Data"
+          aria-label="Add Post"
+        >
+          <div className="w-7 h-7 rounded-lg border-[1.8px] border-zinc-800 dark:border-zinc-200 flex items-center justify-center">
+            <PlusSquare size={16} className="text-zinc-900 dark:text-white stroke-[2.4]" />
+          </div>
+          <span className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 leading-none">
+            Import
+          </span>
+        </button>
+
+        {/* Tab 4: Insights / Analytics */}
+        <button
+          onClick={() => handleNavClick("analytics")}
+          className="flex-1 h-full min-h-[44px] flex flex-col items-center justify-center gap-0.5 cursor-pointer active:scale-90 transition-transform"
+          title="Insights & Analytics"
+          aria-label="Insights"
+        >
+          <BarChart3
+            size={21}
+            className={`transition-colors ${
+              currentView === "analytics"
+                ? "text-zinc-950 dark:text-white stroke-[2.5]"
+                : "text-zinc-500 dark:text-zinc-400 stroke-[1.8]"
+            }`}
+          />
+          <span className={`text-[10px] font-medium leading-none ${currentView === "analytics" ? "text-zinc-950 dark:text-white font-bold" : "text-zinc-500 dark:text-zinc-400"}`}>
+            Insights
+          </span>
+        </button>
+
+        {/* Tab 5: Profile / Settings with circular avatar ring */}
+        <button
+          onClick={() => handleNavClick("settings")}
+          className="flex-1 h-full min-h-[44px] flex flex-col items-center justify-center gap-0.5 cursor-pointer active:scale-90 transition-transform"
+          title="Profile & Settings"
+          aria-label="Profile"
+        >
+          <div
+            className={`w-[24px] h-[24px] rounded-full p-[1.5px] transition-all flex items-center justify-center ${
+              currentView === "settings"
+                ? "ring-[1.8px] ring-zinc-950 dark:ring-white"
+                : "ring-1 ring-zinc-300 dark:ring-zinc-700"
+            }`}
+          >
+            <div className="w-full h-full rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center overflow-hidden">
+              <User
+                size={13}
+                className={
+                  currentView === "settings"
+                    ? "text-zinc-950 dark:text-white stroke-[2.5]"
+                    : "text-zinc-500 dark:text-zinc-400 stroke-[1.8]"
+                }
+              />
+            </div>
+          </div>
+          <span className={`text-[10px] font-medium leading-none ${currentView === "settings" ? "text-zinc-950 dark:text-white font-bold" : "text-zinc-500 dark:text-zinc-400"}`}>
+            Profile
+          </span>
+        </button>
       </nav>
 
       {/* Keyboard Shortcuts Dialog */}

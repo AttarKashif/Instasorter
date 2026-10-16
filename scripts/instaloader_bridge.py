@@ -9,13 +9,6 @@ except ImportError:
     HAS_INSTALOADER = False
 
 def extract_post_info(shortcode_or_url):
-    if not HAS_INSTALOADER:
-        return {
-            "success": False,
-            "error": "instaloader python module not installed (falling back to Node.js scrapers)"
-        }
-
-    # Extract shortcode if URL was passed
     code = shortcode_or_url.strip().rstrip('/')
     if '/p/' in code:
         code = code.split('/p/')[1].split('/')[0].split('?')[0]
@@ -27,6 +20,65 @@ def extract_post_info(shortcode_or_url):
     password = os.environ.get("IG_PASSWORD", "").strip()
     session_cookie = os.environ.get("IG_SESSION_COOKIE", "").strip()
     proxy_url = os.environ.get("IG_PROXY", "").strip()
+
+    if not HAS_INSTALOADER:
+        try:
+            sys.path.insert(0, os.path.dirname(__file__))
+            from parth_dl.extractors import MediaExtractor
+            import http.cookiejar
+
+            extractor = MediaExtractor(verbose=False)
+            if session_cookie:
+                c = http.cookiejar.Cookie(
+                    version=0, name='sessionid', value=session_cookie,
+                    port=None, port_specified=False,
+                    domain='.instagram.com', domain_specified=True, domain_initial_dot=True,
+                    path='/', path_specified=True,
+                    secure=True, expires=None, discard=False, comment=None, comment_url=None, rest={}
+                )
+                extractor.cookie_jar.set_cookie(c)
+                if username:
+                    c_user = http.cookiejar.Cookie(
+                        version=0, name='ds_user_id', value=username,
+                        port=None, port_specified=False,
+                        domain='.instagram.com', domain_specified=True, domain_initial_dot=True,
+                        path='/', path_specified=True,
+                        secure=True, expires=None, discard=False, comment=None, comment_url=None, rest={}
+                    )
+                    extractor.cookie_jar.set_cookie(c_user)
+
+            post_info = extractor.extract(f"https://www.instagram.com/p/{code}/")
+            if post_info:
+                carousel_media = []
+                entries = post_info.get("entries") or []
+                for entry in entries:
+                    formats = entry.get("formats") or []
+                    for f in formats:
+                        u = f.get("url")
+                        if u:
+                            carousel_media.append({
+                                "displayUrl": u,
+                                "isVideo": entry.get("kind") == "video",
+                                "videoUrl": u if entry.get("kind") == "video" else None
+                            })
+                            break
+
+                return {
+                    "success": True,
+                    "shortcode": code,
+                    "displayUrl": post_info.get("thumbnail") or (carousel_media[0]["displayUrl"] if carousel_media else None),
+                    "caption": post_info.get("title") or "",
+                    "ownerUsername": post_info.get("uploader") or "",
+                    "isVideo": post_info.get("type") == "video",
+                    "carouselMedia": carousel_media if len(carousel_media) > 1 else [],
+                    "isCarousel": post_info.get("type") == "carousel" or len(carousel_media) > 1,
+                    "strategy": "Python Zero-Dependency Media Extractor (parth-dl)"
+                }
+        except Exception as p_err:
+            return {
+                "success": False,
+                "error": f"Python extract error: {str(p_err)}"
+            }
 
     # Dynamic User-Agent Rotation
     user_agent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"

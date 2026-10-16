@@ -200,6 +200,21 @@ export const ProfileTab: React.FC<ProfileTabProps> = React.memo(({
             </div>
           </div>
         </div>
+
+        {isEditing && (
+          <div className="flex justify-end pt-2 border-t border-m3-outline-variant/15">
+            <button
+              type="button"
+              onClick={() => {
+                triggerVibration("light");
+                onSaveProfile();
+              }}
+              className="px-5 py-2.5 rounded-xl bg-m3-primary text-m3-on-primary text-xs font-bold hover:bg-m3-primary/90 transition-all cursor-pointer shadow-xs active:scale-95"
+            >
+              Save Profile Details
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

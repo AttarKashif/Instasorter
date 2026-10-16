@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Post } from "../../types/post";
-import { Instagram, Image as ImageIcon, Film, Layers, ShieldAlert, FileText, AlertTriangle, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { db } from "../../lib/db";
 import { usePostStore } from "../../store/useStore";
-import { getDynamicCoverByKeywords } from "../../lib/parser";
 import { getCachedThumbnailUrl, storeThumbnailInCache } from "../../lib/thumbnailCache";
+import { registerPostVisibility, retrySingleThumbnail } from "../../lib/thumbnailWorker";
 
 interface InstagramImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
   post: Post;
@@ -16,15 +16,24 @@ interface InstagramImageProps extends React.ImgHTMLAttributes<HTMLImageElement> 
 }
 
 const getInitialImgSrc = (post: Post): string => {
+  if (post.thumbnailStatus === "failed") {
+    return "";
+  }
+
   if (post.thumbnailUrl) {
     const tUrl = post.thumbnailUrl.trim();
+    // Do not use deprecated SVG card fallbacks
+    if (tUrl.endsWith(".svg")) {
+      return "";
+    }
+
     if (
       tUrl.startsWith("/") ||
       tUrl.startsWith("data:") ||
-      tUrl.includes("unsplash.com") ||
-      tUrl.includes("picsum.photos") ||
       (!tUrl.includes("instagram.com") &&
         !tUrl.includes("instagr.am") &&
+        !tUrl.includes("unsplash.com") &&
+        !tUrl.includes("picsum.photos") &&
         tUrl.startsWith("http"))
     ) {
       return tUrl;
@@ -39,29 +48,7 @@ const getInitialImgSrc = (post: Post): string => {
     }
   }
 
-  // Fallback to content-matched aesthetic cover so no card is ever empty
-  return getDynamicCoverByKeywords(post.caption || "", post.tags || [], post.id);
-};
-
-const getDeterministicPalette = (id: string): string[] => {
-  let h1 = 0;
-  let h2 = 0;
-  let h3 = 0;
-  for (let i = 0; i < id.length; i++) {
-    const char = id.charCodeAt(i);
-    h1 = char + ((h1 << 5) - h1);
-    h2 = char * 13 + ((h2 << 3) - h2);
-    h3 = char * 23 + ((h3 << 7) - h3);
-  }
-  
-  const getPastelColor = (hash: number, offset: number) => {
-    const r = Math.abs((hash + offset) % 100) + 120; // 120-220 for bright, elegant pastels
-    const g = Math.abs(((hash >> 8) + offset) % 100) + 120;
-    const b = Math.abs(((hash >> 16) + offset) % 100) + 120;
-    return `rgb(${r}, ${g}, ${b})`;
-  };
-
-  return [getPastelColor(h1, 10), getPastelColor(h2, 50), getPastelColor(h3, 90)];
+  return "";
 };
 
 export const InstagramImage = ({
@@ -75,67 +62,35 @@ export const InstagramImage = ({
   const [imgSrc, setImgSrc] = useState<string>(() =>
     src ? (typeof src === "string" ? src : "") : getInitialImgSrc(post),
   );
-  const [hasFailed, setHasFailed] = useState<boolean>(
-    () => post.thumbnailStatus === "failed" || (!imgSrc && !src),
-  );
+  const [hasFailed, setHasFailed] = useState<boolean>(() => {
+    return post.thumbnailStatus === "failed";
+  });
   const [isInView, setIsInView] = useState<boolean>(false);
   const [isLoaded, setIsLoaded] = useState<boolean>(false);
+  const [isRetrying, setIsRetrying] = useState<boolean>(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-    
+  // Sync state whenever post properties change
   useEffect(() => {
-    let isSubscribed = true;
-    const initialSrc = src ? (typeof src === "string" ? src : "") : getInitialImgSrc(post);
-    const isPersistentlyFailed = post.thumbnailStatus === "failed";
-    
+    const nextSrc = src ? (typeof src === "string" ? src : "") : getInitialImgSrc(post);
+    setImgSrc(nextSrc);
+    setHasFailed(post.thumbnailStatus === "failed");
     setIsLoaded(false);
-    
-    if (initialSrc === "base64-placeholder" || post.thumbnailUrl === "base64-placeholder") {
-      db.posts.get(post.id).then(p => {
-         if (!isSubscribed || !p) return;
-         if (p.thumbnailUrl && p.thumbnailUrl !== "base64-placeholder") {
-            setImgSrc(p.thumbnailUrl);
-            setHasFailed(p.thumbnailStatus === "failed");
-         } else {
-            const fallbackSrc = getInitialImgSrc(p);
-            if (!fallbackSrc && p.thumbnailStatus !== "failed" && p.postUrl) {
-               setHasFailed(true);
-               triggerHeal(true);
-            } else {
-               setImgSrc(fallbackSrc);
-               setHasFailed(p.thumbnailStatus === "failed" || (!fallbackSrc && !src));
-            }
-         }
-      }).catch(() => {});
-    } else {
-      if (!initialSrc && !isPersistentlyFailed && post.postUrl) {
-         setHasFailed(true);
-         triggerHeal(true);
-      } else {
-         setImgSrc(initialSrc);
-         setHasFailed(isPersistentlyFailed || (!initialSrc && !src));
-      }
-    }
-    
-    return () => { isSubscribed = false; };
-  }, [post.thumbnailUrl, post.thumbnailStatus, post.postUrl, post.id, src]);
+  }, [post.thumbnailUrl, post.thumbnailStatus, src]);
 
-
+  // Viewport intersection observer: registers visibility with the background thumbnail worker queue
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
 
-    setIsInView(false);
-
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting) {
-          setIsInView(true);
-          observer.disconnect();
-        }
+        const inView = entry.isIntersecting;
+        setIsInView(inView);
+        registerPostVisibility(post.id, inView);
       },
       {
-        rootMargin: "250px 0px", // start loading 250px before entering viewport
+        rootMargin: "300px 0px",
         threshold: 0.01,
       },
     );
@@ -143,9 +98,11 @@ export const InstagramImage = ({
     observer.observe(el);
     return () => {
       observer.disconnect();
+      registerPostVisibility(post.id, false);
     };
   }, [post.id]);
 
+  // IndexedDB Cache lookup when in view
   useEffect(() => {
     if (!isInView || !imgSrc) return;
     let active = true;
@@ -159,84 +116,74 @@ export const InstagramImage = ({
     };
   }, [isInView, imgSrc]);
 
-  
-  const triggerHeal = (force = true) => {
-    fetch("/api/fetch-thumbnail", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: post.postUrl, id: post.id, force }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && (data.dataUrl || data.path)) {
-          const finalUrl = data.dataUrl || data.path;
-          const updatedFields: Partial<Post> = {
-            thumbnailUrl: finalUrl,
-            thumbnailStatus: "success",
-          };
-          if (
-            data.creatorUsername &&
-            (!post.creatorUsername ||
-              post.creatorUsername === "instagram_creator" ||
-              post.creatorUsername === "instagram_user" ||
-              post.creatorUsername.trim() === "")
-          ) {
-            updatedFields.creatorUsername = data.creatorUsername;
-          }
-          db.posts.update(post.id, updatedFields).catch(() => {});
-          usePostStore.getState().updatePost(post.id, updatedFields);
-        } else {
-          db.posts.update(post.id, { thumbnailStatus: "failed" }).catch(() => {});
-          usePostStore.getState().updatePost(post.id, { thumbnailStatus: "failed" });
-        }
-      })
-      .catch((err) => {
-        console.warn("Failed self-healing thumbnail download:", err);
-        db.posts.update(post.id, { thumbnailStatus: "failed" }).catch(() => {});
-        usePostStore.getState().updatePost(post.id, { thumbnailStatus: "failed" });
-      });
-  };
-
-  const handleError = () => {
-    const fallbackCover = getDynamicCoverByKeywords(post.caption || "", post.tags || [], post.id);
-    if (imgSrc !== fallbackCover) {
-      setImgSrc(fallbackCover);
-      setIsLoaded(true);
-      db.posts.update(post.id, { thumbnailUrl: fallbackCover, thumbnailStatus: "success" }).catch(() => {});
-      usePostStore.getState().updatePost(post.id, { thumbnailUrl: fallbackCover, thumbnailStatus: "success" });
-    } else {
-      setHasFailed(true);
+  const handleManualRetry = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRetrying) return;
+    setIsRetrying(true);
+    setHasFailed(false);
+    try {
+      await retrySingleThumbnail(post.id);
+    } catch (err) {
+      console.warn("Manual thumbnail retry error:", err);
+    } finally {
+      setTimeout(() => setIsRetrying(false), 2000);
     }
-    if (!hasFailed && post.postUrl) {
-      triggerHeal(true);
+  }, [post.id, isRetrying]);
+
+  const handleError = useCallback(() => {
+    setHasFailed(true);
+    setImgSrc("");
+    const attempts = post.thumbnailAttempts || 0;
+    if (attempts >= 4) {
+      db.posts.update(post.id, { thumbnailStatus: "failed" }).catch(() => {});
+      usePostStore.getState().updatePost(post.id, { thumbnailStatus: "failed" });
     }
-  };
+  }, [post.id, post.thumbnailAttempts]);
 
-  const isDataUri = post.thumbnailUrl && post.thumbnailUrl.startsWith("data:");
+  // 1. When actively pending in queue without an image yet, render a subtle, minimal Instagram-dark shimmer
+  if (!imgSrc && post.thumbnailStatus === "pending") {
+    return (
+      <div
+        ref={containerRef}
+        className="w-full h-full relative overflow-hidden bg-zinc-950 dark:bg-black flex items-center justify-center select-none"
+        title="Loading Instagram media..."
+      >
+        <div className="absolute inset-0 bg-zinc-900/40 dark:bg-black/90 pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.03] to-transparent animate-pulse pointer-events-none" />
+      </div>
+    );
+  }
 
-  // If thumbnail scrape or image loading failed, fall back to clean gradient background instead of error SVG
-  const palette = post.colorPalette && post.colorPalette.length >= 2
-    ? post.colorPalette
-    : getDeterministicPalette(post.id);
+  // 2. When thumbnail fetching or loading fails, render the clean, minimal blank screen
+  if (hasFailed || post.thumbnailStatus === "failed" || !imgSrc) {
+    return (
+      <div
+        ref={containerRef}
+        className="w-full h-full relative overflow-hidden bg-zinc-950 dark:bg-black flex items-center justify-center select-none group/blank"
+        title={post.caption ? `${post.caption.slice(0, 40)}...` : "Instagram Media"}
+      >
+        {/* Flat minimal dark canvas matching Instagram unloaded state */}
+        <div className="absolute inset-0 bg-zinc-900/40 dark:bg-black/90 pointer-events-none" />
 
-  const gradientStyle = {
-    background: `radial-gradient(circle at 20% 20%, ${palette[0]} 0%, transparent 60%),
-                 radial-gradient(circle at 80% 30%, ${palette[1]} 0%, transparent 60%),
-                 radial-gradient(circle at 40% 80%, ${palette[2] || palette[0]} 0%, transparent 70%),
-                 var(--m3-surface-low)`,
-    filter: "blur(28px) saturate(1.3)",
-    transform: "scale(1.2)",
-  };
+        {/* Subtle, non-intrusive retry button revealed on hover or touch */}
+        {post.postUrl && (
+          <button
+            type="button"
+            onClick={handleManualRetry}
+            disabled={isRetrying}
+            className="relative z-10 opacity-0 group-hover/blank:opacity-85 hover:!opacity-100 active:scale-95 transition-all duration-200 px-2.5 py-1.5 rounded-full bg-black/80 hover:bg-black border border-white/20 text-white text-[11px] font-medium flex items-center gap-1.5 shadow-lg backdrop-blur-md cursor-pointer"
+            title="Retry fetching preview image"
+          >
+            <RefreshCw size={12} className={isRetrying ? "animate-spin text-white" : "text-white/80"} />
+            <span className="hidden sm:inline text-[10px] tracking-wide font-sans">Retry Fetch</span>
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-m3-surface-container">
-      {/* Dynamic Blur-up Gradient Placeholder */}
-      <div 
-        className={`absolute inset-0 z-0 transition-opacity duration-700 ease-in-out ${
-          isLoaded && imgSrc ? "opacity-0 pointer-events-none" : "opacity-100"
-        }`}
-        style={gradientStyle}
-      />
+    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-zinc-950 dark:bg-black">
 
       {/* Actual image */}
       {isInView && (

@@ -62,7 +62,7 @@ export class GlobalErrorBoundary extends Component<Props, State> {
                   Application Encountered an Unexpected Error
                 </h1>
                 <p className="text-xs text-m3-on-surface-variant">
-                  Instasorter Developer Protection: Crash details have been recorded in real-time developer telemetry logs.
+                  Instasorter Offline Recovery: An unexpected issue occurred while rendering.
                 </p>
               </div>
             </div>

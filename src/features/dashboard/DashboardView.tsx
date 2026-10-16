@@ -15,6 +15,7 @@ import { db } from "../../lib/db";
 import { triggerVibration } from "../../lib/vibrate";
 import { usePostStore } from "../../store/useStore";
 import { PostCard } from "../../components/ui/PostCard";
+import { InstagramSquareGridItem } from "../../components/ui/InstagramSquareGridItem";
 import { PostCardSkeleton } from "../../components/ui/PostCardSkeleton";
 import { EmptyState } from "../../components/ui/EmptyState";
 import emptyDashboardImg from "../../assets/images/empty_dashboard_1786223894917.jpg";
@@ -39,6 +40,7 @@ import {
   Tag,
   Folder,
   LayoutGrid,
+  Grid3X3,
   List,
   Heart,
   ExternalLink,
@@ -69,12 +71,16 @@ import {
   ArrowUp,
   Inbox,
   SlidersHorizontal,
+  Play,
+  SquareStack,
+  Image as ImageIcon,
   Film,
   History,
   MapPin,
   Shuffle,
   Pin,
   Star,
+  Camera,
 } from "lucide-react";
 import Fuse from "fuse.js";
 import { motion, AnimatePresence, LayoutGroup, useReducedMotion } from "motion/react";
@@ -354,20 +360,20 @@ export const DashboardView = React.memo(
       if (!scrollElement || gridDensity === "list") return;
 
       const updateColumns = (width: number) => {
-        let cols = 2;
+        let cols = 3;
         if (gridDensity === "single") {
-          // Target width for single-feed layout is around 480px per card
-          cols = Math.max(1, Math.floor(width / 480));
-          // Cap it at a maximum of 3 columns for single mode to keep the Instagram-feed feel
-          if (cols > 3) cols = 3;
+          // Instagram Single Column Feed Stream
+          cols = 1;
         } else if (gridDensity === "double") {
-          // Ensure grid layout switches automatically between single (1), double (2), and quad (4) columns based on screen width/device size
-          if (width <= 640) {
-            cols = 1;
-          } else if (width <= 1024) {
+          // Instagram Explore / Media Square Gallery Grid (2-column on mobile)
+          if (width <= 560) {
             cols = 2;
-          } else {
+          } else if (width <= 960) {
+            cols = 3;
+          } else if (width <= 1400) {
             cols = 4;
+          } else {
+            cols = 5;
           }
         }
         setMasonryColumns(cols);
@@ -864,9 +870,50 @@ export const DashboardView = React.memo(
       }
     };
 
+    const { isPostVideo, isPostCarousel, isPostSinglePic } = useMemo(() => {
+      const isVideo = (p: Post) =>
+        p.mediaType === "video" ||
+        !!p.isReel ||
+        (!!p.postUrl && (p.postUrl.includes("/reel/") || p.postUrl.includes("/reels/")));
+      const isCarousel = (p: Post) => {
+        if (isVideo(p)) return false;
+        return (
+          p.mediaType === "carousel" ||
+          (Array.isArray(p.additionalSlides) && p.additionalSlides.length > 0) ||
+          (typeof p.mediaCount === "number" && p.mediaCount > 1)
+        );
+      };
+      const isSingle = (p: Post) => !isVideo(p) && !isCarousel(p);
+      return { isPostVideo: isVideo, isPostCarousel: isCarousel, isPostSinglePic: isSingle };
+    }, []);
+
+    const mediaCounts = useMemo(() => {
+      let photos = 0;
+      let carousels = 0;
+      let videos = 0;
+      for (let i = 0; i < posts.length; i++) {
+        const p = posts[i];
+        if (isPostVideo(p)) {
+          videos++;
+        } else if (isPostCarousel(p)) {
+          carousels++;
+        } else {
+          photos++;
+        }
+      }
+      return {
+        all: posts.length,
+        photos,
+        carousels,
+        videos,
+      };
+    }, [posts, isPostVideo, isPostCarousel]);
+
     const sortOptions = useMemo(
       () => [
         { value: "savedAt", label: "Date Saved" },
+        { value: "carouselSlides", label: "📑 Carousel Slides (Depth)" },
+        { value: "isFavorite", label: "⭐ Starred First" },
         { value: "shuffle", label: "🎲 Shuffled / Forgotten Gems" },
         { value: "creatorUsername", label: "Creator Username" },
         { value: "mediaType", label: "Post Type / Format" },
@@ -1108,7 +1155,15 @@ export const DashboardView = React.memo(
         if (filterFavoriteOnly && !p.isFavorite) return false;
         if (filterArchived === "active" && p.isArchived) return false;
         if (filterArchived === "archived" && !p.isArchived) return false;
-        if (filterMediaType !== "all" && (p.mediaType || "image") !== filterMediaType) return false;
+        if (filterMediaType !== "all") {
+          if (filterMediaType === "photo" || filterMediaType === "image") {
+            if (!isPostSinglePic(p)) return false;
+          } else if (filterMediaType === "carousel") {
+            if (!isPostCarousel(p)) return false;
+          } else if (filterMediaType === "video" || filterMediaType === "reel") {
+            if (!isPostVideo(p)) return false;
+          }
+        }
         if (filterHasNotes && (!p.notes || p.notes.trim().length === 0)) return false;
         if (filterHasLocation && (!p.location || p.location.trim().length === 0)) return false;
         if (filterHasHashtags && (!p.hashtags || p.hashtags.length === 0)) return false;
@@ -1154,6 +1209,16 @@ export const DashboardView = React.memo(
           const timeA = a.savedAt ? new Date(a.savedAt).getTime() : 0;
           const timeB = b.savedAt ? new Date(b.savedAt).getTime() : 0;
           cmp = timeB - timeA;
+        } else if (sortBy === "carouselSlides") {
+          const getSlideCount = (p: Post) => {
+            if (p.mediaCount && p.mediaCount > 1) return p.mediaCount;
+            if (p.additionalSlides && p.additionalSlides.length > 0) return 1 + p.additionalSlides.length;
+            if (p.mediaType === "carousel") return 2;
+            return 1;
+          };
+          cmp = getSlideCount(b) - getSlideCount(a);
+        } else if (sortBy === "isFavorite") {
+          cmp = (b.isFavorite ? 1 : 0) - (a.isFavorite ? 1 : 0);
         } else if (sortBy === "commentsCount") {
           const valA = a.comments?.length || 0;
           const valB = b.comments?.length || 0;
@@ -1935,6 +2000,7 @@ export const DashboardView = React.memo(
 
                       {/* Unified Curator Bar Toggle Button */}
                       <button
+                        id="tour-filters-panel"
                         onClick={() => setIsSidebarOpen(!isSidebarOpen)}
                         className={`flex items-center gap-1.5 px-4 md:px-3 py-1.5 border rounded-lg text-xs font-bold transition-all cursor-pointer h-11 md:h-8 ${
                           isSidebarOpen
@@ -1984,61 +2050,75 @@ export const DashboardView = React.memo(
                         )}
                       </button>
 
-                      {/* Layout Selector */}
-                      <div className="flex items-center bg-m3-surface-variant/20 border border-m3-outline-variant/20 rounded-lg p-0.5 shrink-0 h-11 md:h-8 relative z-0">
+                      {/* Instagram Layout Selector (3x3 Grid vs Feed Stream vs List) */}
+                      <div id="tour-density-toggle" className="flex items-center bg-m3-surface-variant/20 border border-m3-outline-variant/20 rounded-xl p-0.5 shrink-0 h-10 md:h-8 relative z-0">
+                        {/* 3x3 Media Square Grid */}
                         <button
-                          onClick={() => setGridDensity("single")}
-                          className={`relative flex items-center justify-center w-10 h-9 md:w-8 md:h-7 rounded-md transition-colors duration-300 cursor-pointer ${
-                            gridDensity === "single"
-                              ? "text-m3-on-primary font-bold"
-                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/20"
-                          }`}
-                          title="Single column feed (Instagram style)"
-                        >
-                          {gridDensity === "single" && (
-                            <motion.div
-                              layoutId="active-density-bg"
-                              className="absolute inset-0 bg-m3-primary rounded-md shadow-xs -z-10"
-                              transition={shouldReduceMotion ? { duration: 0.05 } : { type: "spring", stiffness: 380, damping: 30 }}
-                            />
-                          )}
-                          <Smartphone size={14} className="relative z-10" />
-                        </button>
-                        <button
-                          onClick={() => setGridDensity("double")}
-                          className={`relative flex items-center justify-center w-10 h-9 md:w-8 md:h-7 rounded-md transition-colors duration-300 cursor-pointer ${
+                          onClick={() => {
+                            triggerVibration("light");
+                            setGridDensity("double");
+                          }}
+                          className={`relative flex items-center justify-center w-9 h-8 md:w-8 md:h-7 rounded-lg transition-colors duration-200 cursor-pointer ${
                             gridDensity === "double"
                               ? "text-m3-on-primary font-bold"
-                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/20"
+                              : "text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/20"
                           }`}
-                          title="Two-column masonry grid"
+                          title="Instagram 3x3 Media Square Grid"
                         >
                           {gridDensity === "double" && (
                             <motion.div
                               layoutId="active-density-bg"
-                              className="absolute inset-0 bg-m3-primary rounded-md shadow-xs -z-10"
+                              className="absolute inset-0 bg-m3-primary rounded-lg shadow-xs -z-10"
                               transition={shouldReduceMotion ? { duration: 0.05 } : { type: "spring", stiffness: 380, damping: 30 }}
                             />
                           )}
-                          <LayoutGrid size={14} className="relative z-10" />
+                          <Grid3X3 size={15} className="relative z-10" />
                         </button>
+
+                        {/* Feed Stream */}
                         <button
-                          onClick={() => setGridDensity("list")}
-                          className={`relative flex items-center justify-center w-10 h-9 md:w-8 md:h-7 rounded-md transition-colors duration-300 cursor-pointer ${
+                          onClick={() => {
+                            triggerVibration("light");
+                            setGridDensity("single");
+                          }}
+                          className={`relative flex items-center justify-center w-9 h-8 md:w-8 md:h-7 rounded-lg transition-colors duration-200 cursor-pointer ${
+                            gridDensity === "single"
+                              ? "text-m3-on-primary font-bold"
+                              : "text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/20"
+                          }`}
+                          title="Instagram Feed Stream"
+                        >
+                          {gridDensity === "single" && (
+                            <motion.div
+                              layoutId="active-density-bg"
+                              className="absolute inset-0 bg-m3-primary rounded-lg shadow-xs -z-10"
+                              transition={shouldReduceMotion ? { duration: 0.05 } : { type: "spring", stiffness: 380, damping: 30 }}
+                            />
+                          )}
+                          <Smartphone size={15} className="relative z-10" />
+                        </button>
+
+                        {/* Compact List */}
+                        <button
+                          onClick={() => {
+                            triggerVibration("light");
+                            setGridDensity("list");
+                          }}
+                          className={`relative flex items-center justify-center w-9 h-8 md:w-8 md:h-7 rounded-lg transition-colors duration-200 cursor-pointer ${
                             gridDensity === "list"
                               ? "text-m3-on-primary font-bold"
-                              : "text-m3-on-surface-variant hover:bg-m3-surface-variant/20"
+                              : "text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/20"
                           }`}
-                          title="Compact list layout"
+                          title="Compact List View"
                         >
                           {gridDensity === "list" && (
                             <motion.div
                               layoutId="active-density-bg"
-                              className="absolute inset-0 bg-m3-primary rounded-md shadow-xs -z-10"
+                              className="absolute inset-0 bg-m3-primary rounded-lg shadow-xs -z-10"
                               transition={shouldReduceMotion ? { duration: 0.05 } : { type: "spring", stiffness: 380, damping: 30 }}
                             />
                           )}
-                          <List size={14} className="relative z-10" />
+                          <List size={15} className="relative z-10" />
                         </button>
                       </div>
 
@@ -2062,6 +2142,103 @@ export const DashboardView = React.memo(
               )}
             </div>
           </header>
+
+          {/* Instagram-Style Media Bifurcation Tabs & Quick Sort Bar */}
+          {posts.length > 0 && dashboardTab === "feed" && (
+            <div className="w-full bg-m3-surface/90 backdrop-blur-xl border-b border-m3-outline-variant/30 sticky top-[57px] md:top-[57px] z-20 px-3 sm:px-6 py-2 select-none">
+              <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+                {/* Instagram Media Bifurcation Tabs */}
+                <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                  {[
+                    { id: "all", label: "All Posts", icon: Grid3X3, count: mediaCounts.all },
+                    { id: "photo", label: "Single Pic", icon: ImageIcon, count: mediaCounts.photos },
+                    { id: "carousel", label: "Carousels", icon: SquareStack, count: mediaCounts.carousels },
+                    { id: "video", label: "Videos & Reels", icon: Play, count: mediaCounts.videos },
+                  ].map((tab) => {
+                    const isSelected =
+                      (tab.id === "all" && filterMediaType === "all") ||
+                      (tab.id === "photo" && (filterMediaType === "photo" || filterMediaType === "image")) ||
+                      (tab.id === "carousel" && filterMediaType === "carousel") ||
+                      (tab.id === "video" && (filterMediaType === "video" || filterMediaType === "reel"));
+                    const Icon = tab.icon;
+
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => {
+                          triggerVibration("light");
+                          setFilterMediaType(tab.id);
+                        }}
+                        className={`relative flex items-center gap-1.5 px-3 py-2 sm:px-4 sm:py-2 rounded-xl text-xs sm:text-sm font-semibold transition-all duration-200 cursor-pointer min-h-[44px] active:scale-95 ${
+                          isSelected
+                            ? "text-m3-primary font-bold shadow-xs"
+                            : "text-m3-on-surface-variant hover:text-m3-on-surface hover:bg-m3-surface-variant/30"
+                        }`}
+                      >
+                        {isSelected && (
+                          <motion.div
+                            layoutId="active-media-tab-pill"
+                            className="absolute inset-0 bg-m3-surface-container rounded-xl border border-m3-outline-variant/40 shadow-xs -z-10"
+                            transition={{ type: "spring", stiffness: 420, damping: 32 }}
+                          />
+                        )}
+                        <Icon size={16} className={`shrink-0 ${isSelected ? "text-m3-primary stroke-[2.4]" : "text-m3-outline stroke-[1.8]"}`} />
+                        <span>{tab.label}</span>
+                        <span
+                          className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ml-0.5 ${
+                            isSelected
+                              ? "bg-m3-primary text-m3-on-primary"
+                              : "bg-m3-surface-variant/50 text-m3-outline"
+                          }`}
+                        >
+                          {tab.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Quick Sort & Starred Filter Controls */}
+                <div className="flex items-center gap-1.5 shrink-0 pl-2">
+                  {/* Starred quick toggle */}
+                  <button
+                    onClick={() => {
+                      triggerVibration("light");
+                      setFilterFavoriteOnly(!filterFavoriteOnly);
+                    }}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer min-h-[40px] active:scale-95 ${
+                      filterFavoriteOnly
+                        ? "bg-amber-500/15 border-amber-500/40 text-amber-600 dark:text-amber-400 font-bold"
+                        : "bg-m3-surface border-m3-outline-variant/30 text-m3-on-surface-variant hover:bg-m3-surface-variant/30"
+                    }`}
+                    title="Filter Starred posts only"
+                  >
+                    <Star size={13} className={filterFavoriteOnly ? "fill-current text-amber-500" : "text-m3-outline"} />
+                    <span className="hidden sm:inline">Starred</span>
+                  </button>
+
+                  {/* Inline Sort Dropdown */}
+                  <div className="flex items-center bg-m3-surface border border-m3-outline-variant/30 rounded-xl px-2 py-1 text-xs text-m3-on-surface-variant min-h-[40px]">
+                    <ArrowUpDown size={12} className="text-m3-outline mr-1.5 shrink-0" />
+                    <select
+                      value={sortBy}
+                      onChange={(e) => {
+                        setSortBy(e.target.value);
+                        triggerVibration("light");
+                      }}
+                      className="bg-transparent text-xs font-medium text-m3-on-surface focus:outline-none cursor-pointer pr-1"
+                    >
+                      {sortOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value} className="bg-m3-surface text-m3-on-surface">
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Collapsible Unified Curator Bar Panel */}
           <AnimatePresence>
@@ -2926,10 +3103,10 @@ export const DashboardView = React.memo(
                                             />
                                             {/* Overlay video indicator */}
                                             {isVideo && (
-                                              <div className="absolute right-1 bottom-1 px-1 py-0.5 rounded-sm text-[8px] font-extrabold tracking-wider bg-black/55 text-white flex items-center gap-0.5 z-10">
-                                                <Film
+                                              <div className="absolute right-1 bottom-1 px-1 py-0.5 rounded-sm text-[8px] font-extrabold tracking-wider bg-black/75 text-white flex items-center justify-center z-10 shadow-xs">
+                                                <Play
                                                   size={8}
-                                                  className="text-m3-primary"
+                                                  className="fill-white text-white ml-0.5"
                                                 />
                                               </div>
                                             )}
@@ -3003,7 +3180,7 @@ export const DashboardView = React.memo(
                                                 className="w-6 h-6 rounded-md bg-m3-surface-variant/30 flex items-center justify-center text-m3-on-surface-variant/70"
                                                 title="Carousel post"
                                               >
-                                                <Layers size={10} />
+                                                <SquareStack size={11} className="stroke-[2.2]" />
                                               </div>
                                             )}
                                           </div>
@@ -3032,7 +3209,11 @@ export const DashboardView = React.memo(
                                   : { layout: { type: "spring", stiffness: 280, damping: 28 } }
                               }
                               key={`grid-row-${rowIndex}`}
-                              className="grid gap-4 w-full mb-4 px-1"
+                              className={`grid w-full mb-1 sm:mb-2 px-0.5 sm:px-1 ${
+                                gridDensity === "double"
+                                  ? "gap-0.5 sm:gap-1 md:gap-1.5"
+                                  : "gap-4 sm:gap-6"
+                              }`}
                               style={{
                                 gridTemplateColumns: `repeat(${masonryColumns}, minmax(0, 1fr))`,
                               }}
@@ -3061,21 +3242,34 @@ export const DashboardView = React.memo(
                                           }
                                     }
                                   >
-                                    <MemoizedPostCard
-                                      post={post}
-                                      isSelected={isSelected}
-                                      onToggleSelect={(e) => toggleSelect(post.id, e)}
-                                      onTagClick={toggleTagFilter}
-                                      onCreatorClick={setCreatorFilter}
-                                      onPeek={setPeekPost}
-                                      onClick={() => handleOpenFullscreen(post)}
-                                      creatorFilter={creatorFilter}
-                                      isImmersive={isImmersive}
-                                      isKeyboardFocused={isKeyboardFocused}
-                                      onMouseEnter={() =>
-                                        setKeyboardFocusedId(post.id)
-                                      }
-                                    />
+                                    {gridDensity === "double" ? (
+                                      <InstagramSquareGridItem
+                                        post={post}
+                                        isSelected={isSelected}
+                                        onToggleSelect={(e) => toggleSelect(post.id, e)}
+                                        onClick={() => handleOpenFullscreen(post)}
+                                        onPeek={setPeekPost}
+                                        onCreatorClick={setCreatorFilter}
+                                      />
+                                    ) : (
+                                      <div className="w-full max-w-[540px] mx-auto">
+                                        <MemoizedPostCard
+                                          post={post}
+                                          isSelected={isSelected}
+                                          onToggleSelect={(e) => toggleSelect(post.id, e)}
+                                          onTagClick={toggleTagFilter}
+                                          onCreatorClick={setCreatorFilter}
+                                          onPeek={setPeekPost}
+                                          onClick={() => handleOpenFullscreen(post)}
+                                          creatorFilter={creatorFilter}
+                                          isImmersive={isImmersive}
+                                          isKeyboardFocused={isKeyboardFocused}
+                                          onMouseEnter={() =>
+                                            setKeyboardFocusedId(post.id)
+                                          }
+                                        />
+                                      </div>
+                                    )}
                                   </motion.div>
                                 );
                               })}

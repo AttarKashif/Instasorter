@@ -7,6 +7,7 @@ import {
   normalizeInstagramPostAsync,
 } from "../../lib/parser";
 import { parseHarFile } from "../../lib/harParser";
+import { parseImportFileAsync } from "../../lib/importService";
 import {
   ImportError,
   InvalidJSONError,
@@ -154,339 +155,22 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
     setProgress(null);
     setShowErrorDetails(false);
 
-    const fileErrors: FailedEntryInfo[] = [];
-    const failedEntries: FailedEntryInfo[] = [];
-    const rawJsonContents: { fileName: string; content: string }[] = [];
-    let harExtractedPosts: any[] = [];
-    let zip: JSZip | undefined = undefined;
-    let totalFilesProcessed = 0;
-
     try {
-      // 1. File type inspection & decompression with specific error handlers
-      if (file.name.toLowerCase().endsWith(".zip")) {
-        try {
-          zip = await JSZip.loadAsync(file);
-        } catch (zipErr: any) {
-          throw new CorruptedZipError(
-            `Failed to decompress ZIP archive '${file.name}': ${zipErr.message || "Invalid or corrupted ZIP header."}`,
-            file.name,
-          );
-        }
+      const { report, posts } = await parseImportFileAsync(file, (curr, tot, msg) => {
+        setProgress({ current: curr, total: tot });
+        setIsProcessing(true, msg);
+      });
 
-        const jsonFiles = Object.values(zip.files).filter(
-          (f) => f.name.toLowerCase().endsWith(".json") && !f.dir,
-        );
-
-        if (jsonFiles.length === 0) {
-          throw new EmptyArchiveError(file.name);
-        }
-
-        for (const f of jsonFiles) {
-          totalFilesProcessed++;
-          try {
-            const strContent = await f.async("string");
-            rawJsonContents.push({ fileName: f.name, content: strContent });
-          } catch (readErr: any) {
-            fileErrors.push({
-              id: `ferr_${fileErrors.length + 1}_${Date.now()}`,
-              fileName: f.name,
-              errorCode: "FILE_READ_ERROR",
-              errorName: "FileReadError",
-              message: `Could not read contents of file '${f.name}' inside ZIP archive: ${readErr.message || "Unknown read error"}`,
-              actionableFeedback:
-                "The ZIP archive may contain corrupted sub-files. Ensure the file was fully downloaded.",
-              timestamp: new Date().toISOString(),
-            });
-          }
-        }
-      } else if (file.name.toLowerCase().endsWith(".json")) {
-        totalFilesProcessed = 1;
-        try {
-          const content = await file.text();
-          rawJsonContents.push({ fileName: file.name, content });
-        } catch (readErr: any) {
-          throw new ImportError(
-            `Failed to read file '${file.name}': ${readErr.message}`,
-            "FILE_READ_ERROR",
-            "Check device permissions and try selecting the file again.",
-            file.name,
-          );
-        }
-      } else if (file.name.toLowerCase().endsWith(".har")) {
-        totalFilesProcessed = 1;
-        try {
-          const content = await file.text();
-          const harResult = parseHarFile(content);
-          if (harResult.posts.length === 0) {
-            throw new Error("No Instagram posts or GraphQL media entries found inside this HAR network recording. Make sure you scrolled through Instagram while DevTools was recording.");
-          }
-          harExtractedPosts = harResult.posts;
-        } catch (harErr: any) {
-          throw new ImportError(
-            `Failed to parse HAR network archive '${file.name}': ${harErr.message}`,
-            "HAR_PARSE_ERROR",
-            "Export the HAR file from your browser DevTools (Network tab -> Export HAR) while viewing Instagram.",
-            file.name,
-          );
-        }
-      } else {
-        throw new UnsupportedFileFormatError(file.name);
-      }
-
-      // 2. Safely parse JSON strings and catch InvalidJSONError per file
-      const allExtractedRaws: { raw: any; fileName: string }[] = [];
-
-      if (harExtractedPosts.length > 0) {
-        harExtractedPosts.forEach((p) => {
-          allExtractedRaws.push({ raw: p, fileName: file.name });
+      if (report.status === "failed") {
+        const fatalErr = report.fileErrors[0];
+        setReport(report);
+        setImportStatus({
+          type: "error",
+          message: fatalErr ? fatalErr.message : "Failed to import files.",
         });
-      }
-
-      for (const item of rawJsonContents) {
-        let parsed: any;
-        try {
-          parsed = JSON.parse(item.content);
-        } catch (jsonErr: any) {
-          const syntaxDetails =
-            jsonErr instanceof Error ? jsonErr.message : String(jsonErr);
-          const invalidErr = new InvalidJSONError(
-            `Invalid JSON syntax in '${item.fileName}': ${syntaxDetails}`,
-            item.fileName,
-            syntaxDetails,
-          );
-          fileErrors.push({
-            id: `ferr_${fileErrors.length + 1}_${Date.now()}`,
-            fileName: item.fileName,
-            errorCode: invalidErr.code,
-            errorName: invalidErr.name,
-            message: invalidErr.message,
-            actionableFeedback: invalidErr.actionableFeedback,
-            rawSample: item.content.substring(0, 150) + "...",
-            timestamp: new Date().toISOString(),
-          });
-          continue; // Skip damaged JSON file, continue reading other files!
-        }
-
-        const extractFromObj = (obj: any, sourceFile: string) => {
-          if (!obj) return;
-
-          const processCollection = (col: any) => {
-            const colName = col.name || "";
-            const items =
-              col.media ||
-              col.media_list_data ||
-              col.saved_saved_media ||
-              col.media_list ||
-              col.posts ||
-              [];
-            if (Array.isArray(items)) {
-              items.forEach((subItem: any) => {
-                if (subItem && typeof subItem === "object") {
-                  const currentCols = subItem.collections || [];
-                  if (colName && !currentCols.includes(colName)) {
-                    currentCols.push(colName);
-                  }
-                  allExtractedRaws.push({
-                    raw: { ...subItem, collections: currentCols },
-                    fileName: sourceFile,
-                  });
-                }
-              });
-            }
-          };
-
-          const isCollectionObj = (val: any) => {
-            if (!val || typeof val !== "object") return false;
-            const hasName =
-              typeof val.name === "string" && val.name.length > 0;
-            const hasMediaArray =
-              Array.isArray(val.media) ||
-              Array.isArray(val.media_list_data) ||
-              Array.isArray(val.saved_saved_media) ||
-              Array.isArray(val.media_list) ||
-              Array.isArray(val.posts);
-            return hasName && hasMediaArray;
-          };
-
-          if (Array.isArray(obj)) {
-            obj.forEach((element: any) => {
-              if (isCollectionObj(element)) {
-                processCollection(element);
-              } else {
-                allExtractedRaws.push({ raw: element, fileName: sourceFile });
-              }
-            });
-            return;
-          }
-
-          if (obj.saved_saved_media && Array.isArray(obj.saved_saved_media)) {
-            obj.saved_saved_media.forEach((element: any) => {
-              allExtractedRaws.push({ raw: element, fileName: sourceFile });
-            });
-          }
-
-          if (obj.saved_collections && Array.isArray(obj.saved_collections)) {
-            obj.saved_collections.forEach((col: any) => {
-              processCollection(col);
-            });
-          }
-
-          if (!obj.saved_saved_media && !obj.saved_collections) {
-            Object.entries(obj).forEach(([_k, val]) => {
-              if (Array.isArray(val)) {
-                val.forEach((element: any) => {
-                  if (isCollectionObj(element)) {
-                    processCollection(element);
-                  } else {
-                    allExtractedRaws.push({
-                      raw: element,
-                      fileName: sourceFile,
-                    });
-                  }
-                });
-              }
-            });
-          }
-        };
-
-        extractFromObj(parsed, item.fileName);
-      }
-
-      const totalEntriesFound = allExtractedRaws.length;
-
-      if (totalEntriesFound === 0 && fileErrors.length > 0) {
-        throw new ImportError(
-          "All JSON files inside the archive contained syntax errors or invalid formatting.",
-          "ALL_FILES_INVALID",
-          "Ensure your Instagram export was downloaded directly from Meta Privacy Settings.",
-          file.name,
-        );
-      } else if (totalEntriesFound === 0) {
-        throw new EmptyArchiveError(file.name);
-      }
-
-      // 3. Batch Normalization with Per-Entry Error Catching
-      const mergedMap = new Map<string, any>();
-      const batchSize = 40;
-
-      setProgress({ current: 0, total: totalEntriesFound });
-
-      for (let i = 0; i < totalEntriesFound; i += batchSize) {
-        const chunk = allExtractedRaws.slice(i, i + batchSize);
-        const currentCount = Math.min(i + batchSize, totalEntriesFound);
-        setIsProcessing(
-          true,
-          `Parsing & Validating: ${currentCount} / ${totalEntriesFound}`,
-        );
-
-        for (let j = 0; j < chunk.length; j++) {
-          const entryIndex = i + j + 1;
-          const { raw, fileName } = chunk[j];
-
-          try {
-            const normalized = await normalizeInstagramPostAsync(raw, zip);
-            const key = normalized.id;
-            const existing = mergedMap.get(key);
-
-            if (existing) {
-              const mergedCollections = Array.from(
-                new Set([
-                  ...(existing.collections || []),
-                  ...(normalized.collections || []),
-                ]),
-              );
-              const mergedTags = Array.from(
-                new Set([
-                  ...(existing.tags || []),
-                  ...(normalized.tags || []),
-                ]),
-              );
-
-              const mergedMediaType =
-                existing.mediaType === "carousel" ||
-                existing.mediaType === "video"
-                  ? existing.mediaType
-                  : normalized.mediaType === "carousel" ||
-                      normalized.mediaType === "video"
-                    ? normalized.mediaType
-                    : "image";
-
-              const mergedAdditionalSlides = Array.from(
-                new Set([
-                  ...(existing.additionalSlides || []),
-                  ...(normalized.additionalSlides || []),
-                ]),
-              ).filter(Boolean);
-
-              let mergedThumbnail = existing.thumbnailUrl;
-              if (
-                normalized.thumbnailUrl &&
-                (normalized.thumbnailUrl.startsWith("data:") ||
-                  !existing.thumbnailUrl ||
-                  existing.thumbnailUrl.includes("unsplash.com"))
-              ) {
-                mergedThumbnail = normalized.thumbnailUrl;
-              }
-
-              mergedMap.set(key, {
-                ...existing,
-                ...normalized,
-                id: existing.id,
-                mediaType: mergedMediaType,
-                additionalSlides:
-                  mergedAdditionalSlides.length > 0
-                    ? mergedAdditionalSlides
-                    : undefined,
-                collections: mergedCollections,
-                tags: mergedTags,
-                isFavorite: existing.isFavorite || normalized.isFavorite,
-                isArchived: existing.isArchived || normalized.isArchived,
-                notes: existing.notes || normalized.notes,
-                thumbnailUrl: mergedThumbnail,
-              });
-            } else {
-              mergedMap.set(key, normalized);
-            }
-          } catch (entryErr: any) {
-            const isKnownImportErr = entryErr instanceof ImportError;
-            failedEntries.push({
-              id: `err_${entryIndex}_${Date.now()}`,
-              fileName,
-              entryIndex,
-              errorCode: isKnownImportErr ? entryErr.code : "MALFORMED_ENTRY",
-              errorName:
-                entryErr instanceof Error
-                  ? entryErr.name
-                  : "NormalizationError",
-              message:
-                entryErr instanceof Error
-                  ? entryErr.message
-                  : "Failed to normalize entry",
-              actionableFeedback: isKnownImportErr
-                ? entryErr.actionableFeedback
-                : "This item lacks required Instagram fields (post URL, media link, or ID). Verify your export dataset.",
-              rawSample:
-                typeof raw === "object"
-                  ? JSON.stringify(raw).substring(0, 140) + "..."
-                  : String(raw),
-              timestamp: new Date().toISOString(),
-            });
-          }
-        }
-
-        setProgress({ current: currentCount, total: totalEntriesFound });
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
-
-      const finalNormalizedPosts = Array.from(mergedMap.values());
-
-      if (finalNormalizedPosts.length === 0) {
-        throw new ImportError(
-          `No valid Instagram posts could be extracted from ${totalEntriesFound} raw entries. All entries were missing required critical fields.`,
-          "NO_VALID_ENTRIES",
-          "Ensure you uploaded an Instagram export containing saved posts rather than account profile settings.",
-          file.name,
-        );
+        setShowErrorDetails(true);
+        toast.error(fatalErr ? fatalErr.message : "Import failed");
+        return;
       }
 
       setIsProcessing(true, "Saving valid posts to database...");
@@ -496,7 +180,7 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
       let newPostsCount = 0;
       let duplicatesSkippedCount = 0;
 
-      for (const p of finalNormalizedPosts) {
+      for (const p of posts) {
         if (existingIds.has(p.id)) {
           duplicatesSkippedCount++;
         } else {
@@ -504,24 +188,20 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
         }
       }
 
-      await db.posts.bulkPut(finalNormalizedPosts);
+      await db.posts.bulkPut(posts);
 
       // Automatically run deduplication and batch categorization silently on import
-      const { mergedDuplicatesCount, autoCategorizedCount, freshPosts } =
-        await runAutoDeduplicationAndBatching();
-
+      const { freshPosts } = await runAutoDeduplicationAndBatching();
       setPosts(freshPosts);
 
       // Trigger background thumbnail worker
-      const { runThumbnailWorker } = await import(
-        "../../lib/thumbnailWorker"
-      );
+      const { runThumbnailWorker } = await import("../../lib/thumbnailWorker");
       runThumbnailWorker();
 
       localStorage.setItem("last_import_timestamp", Date.now().toString());
 
       // Queue background scrape
-      const queuePayload = finalNormalizedPosts.map((p) => ({
+      const queuePayload = posts.map((p) => ({
         url: p.postUrl,
         id: p.id,
         mediaType: p.mediaType,
@@ -532,44 +212,29 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
         body: JSON.stringify({ posts: queuePayload }),
       }).catch((err) => console.warn("Failed to queue background scrape", err));
 
-      const hasFailures = failedEntries.length > 0 || fileErrors.length > 0;
-      const reportStatus = hasFailures ? "partial_success" : "success";
-
-      const summaryReport: ImportSummaryReport = {
-        status: reportStatus,
-        totalFilesProcessed,
-        totalEntriesFound,
-        successfullyImported: finalNormalizedPosts.length,
+      const updatedReport: ImportSummaryReport = {
+        ...report,
         duplicatesMerged: duplicatesSkippedCount,
-        failedEntriesCount: failedEntries.length + fileErrors.length,
-        failedEntries,
-        fileErrors,
-        timestamp: new Date().toISOString(),
       };
 
-      setReport(summaryReport);
+      setReport(updatedReport);
 
-      if (reportStatus === "success") {
-        toast.success(
-          `Imported ${finalNormalizedPosts.length} posts cleanly!`,
-          { icon: "📥" },
-        );
+      if (updatedReport.status === "success") {
+        toast.success(`Imported ${posts.length} posts cleanly!`, { icon: "📥" });
         setImportStatus({
           type: "success",
-          message: `Successfully imported ${finalNormalizedPosts.length} unique posts from your Instagram export cleanly with zero errors!`,
+          message: `Successfully imported ${posts.length} unique posts from your Instagram export cleanly with zero errors!`,
           stats: {
             newPosts: newPostsCount,
             duplicates: duplicatesSkippedCount,
           },
         });
       } else {
-        toast(
-          `Imported ${finalNormalizedPosts.length} posts (${failedEntries.length + fileErrors.length} entries skipped/failed).`,
-          { icon: "⚠️" },
-        );
+        const skipCount = updatedReport.failedEntriesCount;
+        toast(`Imported ${posts.length} posts (${skipCount} entries skipped/failed).`, { icon: "⚠️" });
         setImportStatus({
           type: "warning",
-          message: `Imported ${finalNormalizedPosts.length} posts successfully. Skipped ${failedEntries.length + fileErrors.length} malformed entries. Review actionable diagnostic feedback below.`,
+          message: `Imported ${posts.length} posts successfully. Skipped ${skipCount} malformed entries. Review actionable diagnostic feedback below.`,
           stats: {
             newPosts: newPostsCount,
             duplicates: duplicatesSkippedCount,
@@ -581,17 +246,14 @@ export const ImportView = React.memo(({ onClose }: ImportViewProps) => {
       console.error("Import processing error:", error);
       const isKnown = error instanceof ImportError;
       const errorCode = isKnown ? error.code : "IMPORT_PROCESSING_FAILED";
-      const errorMsg =
-        error instanceof Error
-          ? error.message
-          : "An unexpected error occurred during import.";
+      const errorMsg = error instanceof Error ? error.message : "An unexpected error occurred during import.";
       const feedback = isKnown
         ? error.actionableFeedback
         : "Verify that your file is an uncorrupted .json or .zip archive directly exported from Instagram or Meta.";
 
       const failureReport: ImportSummaryReport = {
         status: "failed",
-        totalFilesProcessed,
+        totalFilesProcessed: 1,
         totalEntriesFound: 0,
         successfullyImported: 0,
         duplicatesMerged: 0,

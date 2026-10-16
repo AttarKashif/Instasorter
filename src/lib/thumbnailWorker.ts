@@ -560,7 +560,7 @@ async function fetchThumbnailForPostInternal(post: Post) {
   const attempts = (post.thumbnailAttempts || 0) + 1;
   const MAX_RETRIES = 5;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
 
   const startTime = Date.now();
   try {

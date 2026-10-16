@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="100%" height="100%">
+  <defs>
+    <linearGradient id="igGrad_test_id" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#fdf497" />
+      <stop offset="15%" stop-color="#fdf497" />
+      <stop offset="50%" stop-color="#fd5949" />
+      <stop offset="75%" stop-color="#d6249f" />
+      <stop offset="100%" stop-color="#285AEB" />
+    </linearGradient>
+    <linearGradient id="bgGrad_test_id" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#18181b" />
+      <stop offset="100%" stop-color="#09090b" />
+    </linearGradient>
+  </defs>
+  <rect width="600" height="600" fill="url(#bgGrad_test_id)" />
+  <circle cx="300" cy="240" r="140" fill="none" stroke="url(#igGrad_test_id)" stroke-width="8" opacity="0.25" />
+  <rect x="230" y="170" width="140" height="140" rx="36" fill="none" stroke="url(#igGrad_test_id)" stroke-width="10" />
+  <circle cx="300" cy="240" r="42" fill="none" stroke="url(#igGrad_test_id)" stroke-width="10" />
+  <circle cx="342" cy="198" r="9" fill="url(#igGrad_test_id)" />
+  <text x="300" y="410" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="26" font-weight="700" fill="#f4f4f5" text-anchor="middle">Post DF2N8ZTSF5T</text>
+  <text x="300" y="448" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="500" fill="#a1a1aa" text-anchor="middle">Instagram Media (DF2N8ZTSF5T)</text>
+  <rect x="210" y="480" width="180" height="34" rx="17" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.12)" stroke-width="1" />
+  <text x="300" y="502" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#e4e4e7" text-anchor="middle">INSTASORTER PREVIEW</text>
+</svg>

@@ -9,7 +9,10 @@ import {
   Heart,
   ExternalLink,
   Calendar,
+  Play,
+  SquareStack,
   Film,
+  Layers,
   Image as ImageIcon,
   Check,
   AlertTriangle,
@@ -120,6 +123,20 @@ export const PostCard = React.memo(
 
     // Success animation state
     const [successAnimationType, setSuccessAnimationType] = useState<"archive" | "collection" | null>(null);
+    const [showHeartBurst, setShowHeartBurst] = useState(false);
+    const lastMediaTapRef = useRef<number>(0);
+
+    const handleMediaDoubleTap = useCallback(async (e: React.MouseEvent | React.TouchEvent) => {
+      e.stopPropagation();
+      setShowHeartBurst(true);
+      triggerVibration("double");
+      if (!post.isFavorite) {
+        toggleFavorite(post.id);
+        await db.posts.update(post.id, { isFavorite: true });
+        toast.success(t.likedAdded, { icon: "❤️", duration: 1200 });
+      }
+      setTimeout(() => setShowHeartBurst(false), 800);
+    }, [post.id, post.isFavorite, toggleFavorite, t.likedAdded]);
 
     // Google Search Grounding & Verification States
     const [isResearching, setIsResearching] = useState(false);
@@ -738,27 +755,16 @@ export const PostCard = React.memo(
 
               {/* Media indicator badges */}
               <div className="flex items-center gap-1">
-                {post.thumbnailStatus === "failed" && (
-                  <div
-                    className="z-30 pointer-events-auto w-6 h-6 rounded-full bg-red-500/90 text-white flex items-center justify-center shadow-md border border-red-400 cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      retrySingleThumbnail(post.id);
-                      toast.success("Retrying download...");
-                    }}
-                    title="Scrape preview failed (Click to retry)"
-                  >
-                    <AlertTriangle size={11} className="stroke-[2.5]" />
-                  </div>
-                )}
-                <span className="px-2 py-0.5 rounded-md text-[8px] font-extrabold tracking-wider uppercase bg-black/45 text-white flex items-center gap-1 backdrop-blur-md border border-white/10 shadow-sm">
+                <span className="px-2 py-0.5 rounded-md text-[9px] font-mono font-bold tracking-wider uppercase bg-black/65 text-white flex items-center gap-1.5 backdrop-blur-md border border-white/15 shadow-sm">
                   {isVideo ? (
-                    <Film size={8} className="text-m3-primary" />
+                    <Play size={9} className="fill-white text-white" />
+                  ) : post.mediaType === "carousel" ? (
+                    <SquareStack size={10} className="stroke-[2.2] text-white" />
                   ) : (
-                    <ImageIcon size={8} className="text-m3-primary" />
+                    <ImageIcon size={9} className="text-white" />
                   )}
                   <span>
-                    {post.mediaType || "image"}
+                    {isVideo ? "Video" : post.mediaType === "carousel" ? "Carousel" : "Photo"}
                     {post.mediaType === "carousel" && ` (${post.mediaCount || slides.length})`}
                   </span>
                 </span>
@@ -1084,6 +1090,7 @@ export const PostCard = React.memo(
         {/* ================= FULL COVER MEDIA CAROUSEL ================= */}
         <motion.div
           layoutId={`post-media-${post.id}`}
+          onDoubleClick={handleMediaDoubleTap}
           className={`relative overflow-hidden w-full ${aspectClass} shrink-0 bg-black select-none flex flex-col justify-between group/carousel`}
         >
           {/* Background Image / Slider */}
@@ -1229,7 +1236,9 @@ export const PostCard = React.memo(
 
                 <span className="px-2 py-0.5 rounded-md text-[8px] font-extrabold tracking-wider uppercase bg-black/45 text-white flex items-center gap-1 backdrop-blur-md border border-white/10 shadow-sm">
                   {isVideo ? (
-                    <Film size={8} className="text-m3-primary" />
+                    <Play size={8} className="fill-current text-m3-primary" />
+                  ) : post.mediaType === "carousel" ? (
+                    <SquareStack size={9} className="stroke-[2.2] text-m3-primary" />
                   ) : (
                     <ImageIcon size={8} className="text-m3-primary" />
                   )}
@@ -1559,6 +1568,24 @@ export const PostCard = React.memo(
               </div>
             </div>
           </div>
+
+          {/* Double Tap Heart Burst Animation */}
+          <AnimatePresence>
+            {showHeartBurst && (
+              <motion.div
+                initial={{ scale: 0.3, opacity: 0 }}
+                animate={{ scale: [0.3, 1.35, 1.1], opacity: 1 }}
+                exit={{ scale: 0.6, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 450, damping: 18 }}
+                className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none"
+              >
+                <Heart
+                  size={76}
+                  className="fill-red-500 text-white drop-shadow-[0_4px_24px_rgba(239,68,68,0.7)]"
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
 
         {/* ================= NOTES & COMMENTS EXPANDED PANEL ================= */}
